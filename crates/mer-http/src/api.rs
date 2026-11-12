@@ -1,6 +1,7 @@
 //! JSON API behind the web panel. Every call except sign-in needs a session,
 //! and every call that changes something needs the session's CSRF token.
-use crate::{header, lock, App, Reply, Surface};
+use crate::catalog::{package_of, wish_hint};
+use crate::{header, lock, percent_decode, App, Reply, Surface};
 use mer_auth::{require, AuthError, Identity, Role};
 use mer_core::EntryOp;
 use mer_meta::MetaError;
@@ -101,6 +102,41 @@ fn query_u32(query: &str, name: &str, default: u32, max: u32) -> u32 {
         .min(max)
 }
 
+/// A text parameter of the query string, decoded.
+fn query_str(query: &str, name: &str) -> Option<String> {
+    let raw = query.split('&').find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == name).map(|(_, v)| v))?;
+    percent_decode(&raw.replace('+', " ")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// The snapshot a listing is about: the one asked for, else what is
+/// published, else the newest.
+fn listing_snapshot(t: &mer_meta::Tx, repo: &mer_meta::Repo, query: &str) -> mer_meta::Result<Option<u64>> {
+    if let Some(seq) = query_str(query, "snapshot").and_then(|s| s.parse::<u64>().ok()) {
+        return Ok(t.snapshot_get(repo.id, seq)?.map(|s| s.seq));
+    }
+    Ok(match t.live(repo.id)? {
+        Some(l) => Some(l.seq),
+        None => t.snapshot_head(repo.id)?.map(|h| h.seq),
+    })
+}
+
+/// The wishlist as text, to carry to the collector: one line per wish with
+/// what to add to the sync command there.
+fn wishlist_export(app: &App) -> Result<Reply, ApiError> {
+    let (rows, formats) = app.st.meta().read(|t| {
+        let formats: BTreeMap<String, String> = t.repo_list()?.into_iter().map(|r| (r.name, r.format)).collect();
+        Ok((t.miss_list(100_000)?, formats))
+    })?;
+    let mut out = String::from("# Wishlist: what clients asked for and the vault does not have.\n# repository\trequests\titem\tadd to the sync command on the collector\n");
+    for m in &rows {
+        // Tabs and line breaks cannot occur in stored paths, but nothing here relies on that.
+        let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+        let hint = formats.get(&m.repo).and_then(|f| wish_hint(f, &m.path)).unwrap_or_default();
+        out.push_str(&format!("{}\t{}\t{}\t{}\n", clean(&m.repo), m.count, clean(&m.path), clean(&hint)));
+    }
+    Ok(Reply::text(200, out).with("Content-Disposition", "attachment; filename=\"wishlist.txt\"").with("Cache-Control", "no-store"))
+}
+
 pub(crate) fn handle(app: &App, req: &mut Request, path: &str, query: &str, surface: Surface) -> Reply {
     let method = req.method().clone();
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -122,6 +158,9 @@ pub(crate) fn handle(app: &App, req: &mut Request, path: &str, query: &str, surf
         return Reply::json(401, json!({ "error": "sign in first" }));
     };
     let result = match method {
+        Method::Get if segments.as_slice() == ["wishlist", "export"] => {
+            return wishlist_export(app).unwrap_or_else(|ApiError(status, msg)| Reply::json(status, json!({ "error": msg })));
+        }
         Method::Get => get(app, &me, &segments, query),
         Method::Post => {
             // A page on another site can make the browser send our cookie, but
@@ -192,11 +231,70 @@ fn get(app: &App, me: &Identity, segments: &[&str], query: &str) -> ApiResult {
                 })).collect::<Vec<_>>(),
             }))
         }
+        ["repos", repo, "packages"] => {
+            let limit = query_u32(query, "limit", 200, 2000) as usize;
+            let needle = query_str(query, "q").map(|q| q.to_lowercase());
+            let (seq, format, entries) = st.meta().read(|t| {
+                let r = t.repo_require(repo)?;
+                let seq = listing_snapshot(t, &r, query)?;
+                let entries = match seq {
+                    Some(s) => t.entries_at(r.id, s)?,
+                    None => Vec::new(),
+                };
+                Ok((seq, r.format, entries))
+            })?;
+            // name -> (versions, files, bytes)
+            let mut packages: BTreeMap<String, (Vec<String>, u64, u64)> = BTreeMap::new();
+            let (mut other_files, mut total_bytes) = (0u64, 0u64);
+            for e in &entries {
+                total_bytes += e.size;
+                match package_of(&format, &e.path) {
+                    Some((name, version)) => {
+                        let p = packages.entry(name).or_default();
+                        if !p.0.contains(&version) {
+                            p.0.push(version);
+                        }
+                        p.1 += 1;
+                        p.2 += e.size;
+                    }
+                    None => other_files += 1,
+                }
+            }
+            let total_packages = packages.len();
+            let shown: Vec<Value> = packages
+                .into_iter()
+                .filter(|(name, _)| needle.as_ref().is_none_or(|n| name.to_lowercase().contains(n)))
+                .take(limit)
+                .map(|(name, (versions, files, bytes))| json!({ "name": name, "versions": versions, "files": files, "bytes": bytes }))
+                .collect();
+            Ok(json!({
+                "snapshot": seq, "format": format, "files": entries.len(), "bytes": total_bytes,
+                "total_packages": total_packages, "other_files": other_files, "packages": shown,
+            }))
+        }
+        ["repos", repo, "files"] => {
+            let limit = query_u32(query, "limit", 200, 2000) as usize;
+            let needle = query_str(query, "q").map(|q| q.to_lowercase());
+            let (seq, entries) = st.meta().read(|t| {
+                let r = t.repo_require(repo)?;
+                let seq = listing_snapshot(t, &r, query)?;
+                Ok((seq, match seq {
+                    Some(s) => t.entries_at(r.id, s)?,
+                    None => Vec::new(),
+                }))
+            })?;
+            let matching: Vec<&mer_core::EntryRec> = entries.iter().filter(|e| needle.as_ref().is_none_or(|n| e.path.to_lowercase().contains(n))).collect();
+            Ok(json!({
+                "snapshot": seq, "files": entries.len(), "matching": matching.len(),
+                "items": matching.iter().take(limit).map(|e| json!({ "path": e.path, "size": e.size, "sha256": e.digest.to_hex() })).collect::<Vec<_>>(),
+            }))
+        }
         ["repos", repo, "snapshots", seq, "changes"] => {
             let seq: u64 = seq.parse().map_err(|_| bad("snapshot number"))?;
             let limit = query_u32(query, "limit", 500, 5000) as usize;
-            let (base, ops) = st.meta().read(|t| {
+            let (base, ops, format) = st.meta().read(|t| {
                 let r = t.repo_require(repo)?;
+                let format = r.format.clone();
                 t.snapshot_get(r.id, seq)?.ok_or_else(|| MetaError::NotFound(format!("snapshot {seq}")))?;
                 let base = t.live(r.id)?.map_or(0, |l| l.seq);
                 // What clients would see change if this snapshot went live now.
@@ -206,8 +304,19 @@ fn get(app: &App, me: &Identity, segments: &[&str], query: &str) -> ApiResult {
                     let before = t.lookup(r.id, base, op.path())?;
                     items.push((op, before.is_some()));
                 }
-                Ok((base, items))
+                Ok((base, items, format))
             })?;
+            // The same changes, as packages: which versions come and which go.
+            let mut by_package: BTreeMap<String, (Vec<String>, Vec<String>)> = BTreeMap::new();
+            for (op, _) in &ops {
+                if let Some((name, version)) = package_of(&format, op.path()) {
+                    let p = by_package.entry(name).or_default();
+                    let list = if matches!(op, EntryOp::Put(_)) { &mut p.0 } else { &mut p.1 };
+                    if !list.contains(&version) {
+                        list.push(version);
+                    }
+                }
+            }
             let (mut added, mut changed, mut removed, mut bytes) = (0u64, 0u64, 0u64, 0u64);
             let mut items = Vec::new();
             for (op, existed) in &ops {
@@ -234,12 +343,18 @@ fn get(app: &App, me: &Identity, segments: &[&str], query: &str) -> ApiResult {
             Ok(json!({
                 "base": base, "target": seq, "added": added, "changed": changed, "removed": removed,
                 "bytes": bytes, "total": ops.len(), "items": items,
+                "packages": by_package.iter().take(2000).map(|(name, (added, removed))| json!({ "name": name, "added": added, "removed": removed })).collect::<Vec<_>>(),
+                "total_packages": by_package.len(),
             }))
         }
         ["wishlist"] => {
-            let rows = st.meta().read(|t| t.miss_list(query_u32(query, "limit", 200, 2000)))?;
+            let (rows, formats) = st.meta().read(|t| {
+                let formats: BTreeMap<String, String> = t.repo_list()?.into_iter().map(|r| (r.name, r.format)).collect();
+                Ok((t.miss_list(query_u32(query, "limit", 200, 2000))?, formats))
+            })?;
             Ok(json!(rows.iter().map(|m| json!({
                 "repo": m.repo, "path": m.path, "count": m.count, "last_at": m.last_at,
+                "format": formats.get(&m.repo), "hint": formats.get(&m.repo).and_then(|f| wish_hint(f, &m.path)),
             })).collect::<Vec<_>>()))
         }
         ["audit"] => {
@@ -509,6 +624,31 @@ fn post(app: &App, me: &Identity, segments: &[&str], b: &Value) -> ApiResult {
             require(me.role, Role::Admin)?;
             app.auth.revoke_token(name, actor)?;
             Ok(json!({ "ok": true }))
+        }
+        ["wishlist", "dismiss"] => {
+            require(me.role, Role::Operator)?;
+            let (repo, path) = (str_field(b, "repo")?, str_field(b, "path")?);
+            let existed = st.meta().write(|t| {
+                let existed = t.miss_delete(repo, path)?;
+                if existed {
+                    t.audit(mer_storage::now_ms(), actor, "wishlist.dismiss", &format!("{repo} {path}"))?;
+                }
+                Ok(existed)
+            })?;
+            if !existed {
+                return Err(ApiError(404, "no such wish".into()));
+            }
+            Ok(json!({ "ok": true }))
+        }
+        ["wishlist", "clear"] => {
+            require(me.role, Role::Operator)?;
+            let repo = b.get("repo").and_then(Value::as_str).filter(|r| !r.is_empty());
+            let removed = st.meta().write(|t| {
+                let removed = t.miss_clear_all(repo)?;
+                t.audit(mer_storage::now_ms(), actor, "wishlist.clear", &format!("{} ({removed} wishes)", repo.unwrap_or("every repository")))?;
+                Ok(removed)
+            })?;
+            Ok(json!({ "removed": removed }))
         }
         ["maintenance", "gc"] => {
             require(me.role, Role::Operator)?;
