@@ -65,6 +65,14 @@ services:
     networks: [diode]
     profiles: [formats]
 
+  # Stock clients for the formats added in 1.1, used by deploy/demo-more.sh.
+  helmclient:
+    image: alpine/helm:3.16.4
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [more]
+
 networks:
   internet: {}
   diode:

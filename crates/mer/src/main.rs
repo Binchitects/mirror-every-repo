@@ -88,6 +88,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: NugetCmd,
     },
+    /// Helm chart repositories (collector side).
+    Helm {
+        #[command(subcommand)]
+        cmd: HelmCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -237,6 +242,29 @@ enum OciCmd {
         platforms: Vec<String>,
         /// Additional host the collector may contact (repeatable), for
         /// example the token service of a private registry.
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum HelmCmd {
+    /// Mirror charts from a chart repository into a new snapshot of a helm repo.
+    /// (Charts kept in an OCI registry are mirrored with `mer oci sync`.)
+    Sync {
+        repo: String,
+        /// The chart repository, as given to `helm repo add`.
+        #[arg(long)]
+        url: String,
+        /// What to mirror (repeatable): ingress-nginx (newest stable),
+        /// ingress-nginx@4.15.1, "cert-manager@^1.16".
+        #[arg(long = "chart", short = 'c', required = true)]
+        charts: Vec<String>,
+        /// Let a chart named without a version resolve to a pre-release.
+        #[arg(long)]
+        pre: bool,
+        /// Additional host the collector may contact (repeatable), if the
+        /// repository keeps its chart archives on another host.
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
@@ -1077,6 +1105,28 @@ fn main() -> Result<()> {
                     human(rep.downloaded_bytes),
                     rep.reused
                 );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Helm { cmd } => match cmd {
+            HelmCmd::Sync { repo, url, charts, pre, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                hosts.push(mer_fetch::host_of(&url).ok_or_else(|| anyhow!("{url:?} is not an http(s) URL"))?);
+                let client = mer_fetch::HttpClient::new(&hosts);
+                let cfg = mer_format_helm::HelmConfig { repo_url: url, charts, prerelease: pre };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.repo_url, hosts.join(", "));
+                let rep = mer_format_helm::sync(&st, &repo, &client, &cfg)?;
+                for (name, version) in &rep.charts {
+                    println!("  {name} {version}");
+                }
+                println!("{} charts; downloaded {} ({}), {} already in the store", rep.charts.len(), rep.downloaded, human(rep.downloaded_bytes), rep.reused);
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");
                 }

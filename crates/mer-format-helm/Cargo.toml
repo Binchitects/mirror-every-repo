@@ -1,0 +1,21 @@
+[package]
+name = "mer-format-helm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-blob.workspace = true
+mer-meta.workspace = true
+mer-storage.workspace = true
+mer-fetch.workspace = true
+# Chart versions are semantic versions with npm-style ranges.
+mer-format-npm.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tiny_http.workspace = true

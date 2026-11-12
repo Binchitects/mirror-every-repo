@@ -25,6 +25,7 @@ mer-format-pypi = { path = "crates/mer-format-pypi" }
 mer-format-npm = { path = "crates/mer-format-npm" }
 mer-format-oci = { path = "crates/mer-format-oci" }
 mer-format-nuget = { path = "crates/mer-format-nuget" }
+mer-format-helm = { path = "crates/mer-format-helm" }
 mer-http = { path = "crates/mer-http" }
 mer-auth = { path = "crates/mer-auth" }
 
@@ -33,6 +34,7 @@ serde_json = "1"
 base64 = "0.22"
 sha1 = "0.10"
 libc = "0.2"
+serde_yaml = "0.9"
 
 ureq = "2"
 tiny_http = { version = "0.12", features = ["ssl-rustls"] }

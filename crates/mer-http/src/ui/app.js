@@ -272,6 +272,11 @@ function clientSetupDialog(r) {
       "  </packageSources>", "</configuration>",
     ]);
     if (r.private) add("Token", [`dotnet nuget add source ${base}/v3/index.json --name vault --username any --password <token> --store-password-in-clear-text${insecure}`]);
+  } else if (r.format === "helm") {
+    const insecureNote = secure ? [] : ["# plain HTTP: helm accepts it as is; with a private CA add --ca-file"];
+    add("Add the vault as a chart repository", [`helm repo add vault ${base}`, "helm repo update"].concat(insecureNote));
+    add("Install a chart", ["helm search repo vault/", "helm install <release> vault/<chart>"]);
+    if (r.private) add("Token", [`helm repo add vault ${base} --username any --password <token>`]);
   } else if (r.format === "oci") {
     add("Pull an image", [`docker pull ${host}/${r.name}/<image>:<tag>`, `# for example: docker pull ${host}/${r.name}/library/alpine:3.20`]);
     if (!secure) add("Plain HTTP needs to be allowed on the client (or serve with TLS)", ['# /etc/docker/daemon.json', `{ "insecure-registries": ["${host}"] }`]);

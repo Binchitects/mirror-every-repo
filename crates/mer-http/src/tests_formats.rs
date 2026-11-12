@@ -371,3 +371,17 @@ fn nuget_requests_for_unmirrored_packages_become_wishes() {
     }
     assert_eq!(wishes(&r), vec![("dapper".to_string(), 2), ("a/2.0.0".to_string(), 1)]);
 }
+
+#[test]
+fn helm_repositories_serve_the_index_and_charts_and_record_missing_charts() {
+    let r = rig("charts", "helm", &[("index.yaml", b"apiVersion: v1\nentries: {}\n"), ("charts/web-1.0.0.tgz", b"chart")]);
+    let (status, body, _, _) = get(&r, "/charts/index.yaml");
+    assert_eq!((status, body.as_str()), (200, "apiVersion: v1\nentries: {}\n"));
+    assert_eq!(get(&r, "/charts/charts/web-1.0.0.tgz"), (200, "chart".to_string(), None, Some("application/gzip".to_string())));
+    assert_eq!(get(&r, "/charts/charts/web-2.0.0.tgz").0, 404);
+    // Only a chart archive is a wish; other misses are just misses.
+    for path in ["/charts/charts/web-2.0.0.tgz.prov", "/charts/favicon.ico", "/charts/charts/a/b.tgz", "/charts/charts/..%2f..%2fmeta.db"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![("charts/web-2.0.0".to_string(), 1)]);
+}

@@ -333,12 +333,24 @@ fn oci(app: &App, repo: &Repo, path: &str) -> Route {
     }
 }
 
+// ------------------------------------------------------------------ helm
+
+/// A chart repository is two kinds of file: the index and chart archives.
+/// A chart archive that is missing is a wish, named `<chart>-<version>`.
+fn helm(path: &str) -> Route {
+    match path.strip_prefix("charts/").and_then(|f| f.strip_suffix(".tgz")) {
+        Some(chart) if !chart.is_empty() && !chart.contains('/') => Route::Mapped { path: path.to_string(), wish: Some(format!("charts/{chart}")) },
+        _ => Route::Mapped { path: path.to_string(), wish: None },
+    }
+}
+
 pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str) -> Route {
     match repo.format.as_str() {
         "pypi" => pypi(repo, path),
         "npm" => npm(app, req, tls, repo, path),
         "oci" => oci(app, repo, path),
         "nuget" => nuget(app, req, tls, repo, path),
+        "helm" => helm(path),
         _ => Route::Unhandled,
     }
 }
