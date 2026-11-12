@@ -147,7 +147,7 @@ impl Tx<'_> {
             return Err(MetaError::Invalid(format!("repo name {name:?}")));
         }
         // These are paths of the HTTP server itself.
-        if ["ui", "api", "healthz", "metrics"].contains(&name) {
+        if ["ui", "api", "v2", "healthz", "metrics"].contains(&name) {
             return Err(MetaError::Invalid(format!("repo name {name:?} is reserved")));
         }
         if self.repo_get(name)?.is_some() {
@@ -613,6 +613,23 @@ impl Tx<'_> {
             .query_map(params![repo_id, seq as i64], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })?
+            .collect::<rusqlite::Result<_>>()?;
+        raws.into_iter().map(|(p, r, d, s)| entry_rec(p, r, d, s)).collect()
+    }
+
+    /// Entries of snapshot `seq` whose path starts with `prefix`, sorted by path.
+    pub fn entries_under(&self, repo_id: i64, seq: u64, prefix: &str, limit: u32) -> Result<Vec<EntryRec>> {
+        // A range scan on the primary key: [prefix, prefix + highest code point).
+        let end = format!("{prefix}\u{10FFFF}");
+        let mut st = self.c.prepare(
+            "SELECT e.path, e.role, b.digest, b.size
+               FROM snapshot_entry e JOIN blob b ON b.id = e.blob_id
+              WHERE e.repo_id = ?1 AND e.path >= ?3 AND e.path < ?4 AND e.added_seq <= ?2
+                AND (e.removed_seq IS NULL OR e.removed_seq > ?2)
+              ORDER BY e.path LIMIT ?5",
+        )?;
+        let raws: Vec<(String, i64, Vec<u8>, i64)> = st
+            .query_map(params![repo_id, seq as i64, prefix, end, limit], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<rusqlite::Result<_>>()?;
         raws.into_iter().map(|(p, r, d, s)| entry_rec(p, r, d, s)).collect()
     }

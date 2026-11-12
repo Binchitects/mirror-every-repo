@@ -171,3 +171,160 @@ fn a_forged_host_header_cannot_inject_into_the_document() {
         assert!(out.starts_with("HTTP/1.1 400"), "Host {host:?} gave: {}", out.lines().next().unwrap_or(""));
     }
 }
+
+/// A registry repo holding one image (index + one platform manifest + two blobs).
+fn oci_rig() -> (Rig, String, String, String) {
+    use mer_core::Digest;
+    let config = br#"{"architecture":"amd64"}"#.to_vec();
+    let layer = vec![9u8; 50_000];
+    let manifest = format!(
+        r#"{{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json","config":{{"digest":"sha256:{}","size":{}}},"layers":[{{"digest":"sha256:{}","size":{}}}]}}"#,
+        Digest::of(&config), config.len(), Digest::of(&layer), layer.len()
+    )
+    .into_bytes();
+    let m = Digest::of(&manifest).to_hex();
+    // An index without a mediaType field, as some builders write them.
+    let index = format!(r#"{{"schemaVersion":2,"manifests":[{{"digest":"sha256:{m}","platform":{{"os":"linux","architecture":"amd64"}}}}]}}"#).into_bytes();
+    let i = Digest::of(&index).to_hex();
+    let tag = format!("sha256:{i}\n").into_bytes();
+    let (c, l) = (Digest::of(&config).to_hex(), Digest::of(&layer).to_hex());
+    let r = rig(
+        "hub",
+        "oci",
+        &[
+            (&format!("manifests/library/app/sha256/{i}"), &index),
+            (&format!("manifests/library/app/sha256/{m}"), &manifest),
+            ("tags/library/app/1.0", &tag),
+            ("tags/library/app/stable", &tag),
+            (&format!("blobs/sha256/{c}"), &config),
+            (&format!("blobs/sha256/{l}"), &layer),
+        ],
+    );
+    (r, i, m, l)
+}
+
+fn full(r: &Rig, method: &str, path: &str, headers: &[(&str, &str)]) -> (u16, Vec<u8>, Vec<(String, String)>) {
+    let mut req = ureq::AgentBuilder::new().redirects(0).build().request(method, &format!("{}{path}", r.base));
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    let resp = match req.call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(_, r)) => r,
+        Err(e) => panic!("{path}: {e}"),
+    };
+    let status = resp.status();
+    let hs = resp.headers_names().into_iter().map(|n| (n.to_ascii_lowercase(), resp.header(&n).unwrap_or("").to_string())).collect();
+    let mut body = Vec::new();
+    std::io::Read::read_to_end(&mut resp.into_reader(), &mut body).unwrap();
+    (status, body, hs)
+}
+
+fn hdr<'a>(hs: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    hs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn registry_api_serves_an_image_the_way_container_clients_pull_it() {
+    let (r, index, manifest, layer) = oci_rig();
+    // 1. Ping.
+    let (status, _, hs) = full(&r, "GET", "/v2/", &[]);
+    assert_eq!((status, hdr(&hs, "docker-distribution-api-version")), (200, Some("registry/2.0")));
+
+    // 2. Resolve the tag: a HEAD is enough to learn the digest.
+    let (status, body, hs) = full(&r, "HEAD", "/v2/hub/library/app/manifests/1.0", &[]);
+    assert_eq!((status, body.len()), (200, 0));
+    assert_eq!(hdr(&hs, "docker-content-digest"), Some(format!("sha256:{index}").as_str()));
+    assert_eq!(hdr(&hs, "content-type"), Some("application/vnd.oci.image.index.v1+json"), "inferred for an index without mediaType");
+
+    // 3. Fetch the index by tag and by digest: identical bytes that hash to the digest.
+    let (_, by_tag, _) = full(&r, "GET", "/v2/hub/library/app/manifests/1.0", &[]);
+    let (_, by_digest, _) = full(&r, "GET", &format!("/v2/hub/library/app/manifests/sha256:{index}"), &[]);
+    assert_eq!(by_tag, by_digest);
+    assert_eq!(mer_core::Digest::of(&by_tag).to_hex(), index);
+
+    // 4. The platform manifest, with the media type it declares.
+    let (status, body, hs) = full(&r, "GET", &format!("/v2/hub/library/app/manifests/sha256:{manifest}"), &[]);
+    assert_eq!(status, 200);
+    assert_eq!(hdr(&hs, "content-type"), Some("application/vnd.docker.distribution.manifest.v2+json"));
+    assert_eq!(mer_core::Digest::of(&body).to_hex(), manifest);
+
+    // 5. Layers, including a resumed download.
+    let (status, body, hs) = full(&r, "GET", &format!("/v2/hub/library/app/blobs/sha256:{layer}"), &[]);
+    assert_eq!((status, body.len()), (200, 50_000));
+    assert_eq!(hdr(&hs, "content-length"), Some("50000"));
+    assert_eq!(mer_core::Digest::of(&body).to_hex(), layer);
+    let (status, body, _) = full(&r, "GET", &format!("/v2/hub/library/app/blobs/sha256:{layer}"), &[("Range", "bytes=49990-")]);
+    assert_eq!((status, body.len()), (206, 10));
+
+    // 6. Tag listing.
+    let (_, body, _) = full(&r, "GET", "/v2/hub/library/app/tags/list", &[]);
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap(), serde_json::json!({ "name": "library/app", "tags": ["1.0", "stable"] }));
+}
+
+#[test]
+fn registry_api_refuses_what_it_should() {
+    let (r, index, _, layer) = oci_rig();
+    for path in [
+        "/v2/hub/library/app/manifests/2.0".to_string(),
+        "/v2/hub/library/other/manifests/1.0".to_string(),
+        format!("/v2/hub/library/app/manifests/sha256:{}", "0".repeat(64)),
+        format!("/v2/hub/library/app/blobs/sha256:{}", "0".repeat(64)),
+        "/v2/hub/library/app/blobs/md5:abc".to_string(),
+        "/v2/hub/library/app/manifests/sha256:short".to_string(),
+        "/v2/hub/Library/App/manifests/1.0".to_string(),
+        "/v2/hub/library/../../meta.db/manifests/1.0".to_string(),
+        "/v2/hub/library/app/tags/../../blobs".to_string(),
+        "/v2/hub/nothing/tags/list".to_string(),
+        "/v2/nosuchrepo/library/app/manifests/1.0".to_string(),
+        "/v2/hub".to_string(),
+        "/v2/_catalog".to_string(),
+    ] {
+        let (status, body, _) = full(&r, "GET", &path, &[]);
+        assert_eq!(status, 404, "{path}");
+        assert!(!body.windows(6).any(|w| w == b"SQLite"), "{path}");
+    }
+    // Images are not reachable outside the registry API, and the internal
+    // layout is not a public path.
+    assert_eq!(full(&r, "GET", "/hub/library/app/manifests/1.0", &[]).0, 404);
+    assert_eq!(full(&r, "GET", &format!("/hub/blobs/sha256/{layer}"), &[]).0, 404);
+    assert_eq!(full(&r, "GET", &format!("/v2/hub/manifests/library/app/sha256/{index}"), &[]).0, 404);
+    assert_eq!(full(&r, "GET", "/v2/hub/tags/library/app/1.0", &[]).0, 404);
+    // Only a tag that is not mirrored is a wish; unknown digests and blobs are not.
+    assert_eq!(wishes(&r), vec![("images/library/app:2.0".to_string(), 1), ("images/library/other:1.0".to_string(), 1)]);
+    // Pushing is not offered.
+    assert_eq!(full(&r, "POST", "/v2/hub/library/app/blobs/uploads/", &[]).0, 405);
+    assert_eq!(full(&r, "PUT", "/v2/hub/library/app/manifests/9.9", &[]).0, 405);
+}
+
+#[test]
+fn other_repositories_are_not_reachable_through_the_registry_api() {
+    let r = rig("files", "raw", &[("a.txt", b"plain")]);
+    assert_eq!(full(&r, "GET", "/files/a.txt", &[]).0, 200);
+    assert_eq!(full(&r, "GET", "/v2/files/a.txt", &[]).0, 404);
+    assert!(r.st.create_repo("v2", "raw").is_err(), "the name is reserved");
+}
+
+#[test]
+fn private_image_repositories_ask_for_credentials_at_the_ping() {
+    use base64::Engine;
+    let (r, index, _, _) = oci_rig();
+    let app_auth = mer_auth::Auth::new(r.st.clone());
+    let id = r.st.repo("hub").unwrap().id;
+    r.st.meta().write(|t| t.repo_set_private(id, true)).unwrap();
+    let secret = app_auth.create_token("puller", Some("hub"), "test").unwrap();
+
+    // Without credentials the ping already says so, which is when clients decide to log in.
+    let (status, _, hs) = full(&r, "GET", "/v2/", &[]);
+    assert_eq!(status, 401);
+    assert!(hdr(&hs, "www-authenticate").unwrap().starts_with("Basic"));
+    assert_eq!(full(&r, "GET", "/v2/hub/library/app/manifests/1.0", &[]).0, 401);
+
+    // What `docker login` sends: Basic with any user name and the token as password.
+    let basic = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("anything:{secret}")));
+    assert_eq!(full(&r, "GET", "/v2/", &[("Authorization", &basic)]).0, 200);
+    let (status, _, hs) = full(&r, "HEAD", "/v2/hub/library/app/manifests/1.0", &[("Authorization", &basic)]);
+    assert_eq!((status, hdr(&hs, "docker-content-digest")), (200, Some(format!("sha256:{index}").as_str())));
+    let wrong = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode("anything:mer_wrong"));
+    assert_eq!(full(&r, "GET", "/v2/hub/library/app/manifests/1.0", &[("Authorization", &wrong)]).0, 401);
+}

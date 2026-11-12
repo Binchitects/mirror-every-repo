@@ -54,7 +54,7 @@ fn parse_range(value: &str, size: u64) -> Result<Option<(u64, u64)>, ()> {
 
 /// The secret a client presented: `Authorization: Bearer <token>`, or Basic
 /// auth with the token as the password (what apt and pip can send).
-fn presented_token(req: &Request) -> Option<String> {
+pub(crate) fn presented_token(req: &Request) -> Option<String> {
     let value = header(req, "Authorization")?;
     let (scheme, rest) = value.trim().split_once(' ')?;
     if scheme.eq_ignore_ascii_case("bearer") {
@@ -68,7 +68,9 @@ fn presented_token(req: &Request) -> Option<String> {
     None
 }
 
-pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool) -> Reply {
+/// `via_v2` is true for requests that came in under `/v2/`, the container
+/// registry API. Image repositories answer only there, and nothing else does.
+pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool, via_v2: bool) -> Reply {
     let st = &app.st;
     let Some((repo, path)) = raw.split_once('/') else { return Reply::text(404, "not found\n") };
 
@@ -84,6 +86,9 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool) -> Reply {
         Err(StorageError::Meta(MetaError::NotFound(_))) => return Reply::text(404, "not found\n"),
         Err(_) => return Reply::text(500, "internal error\n"),
     };
+    if (repo_row.format == "oci") != via_v2 {
+        return Reply::text(404, "not found\n");
+    }
     if repo_row.private {
         let allowed = presented_token(req).and_then(|secret| app.auth.check_token(&secret, repo));
         if allowed.is_none() {
@@ -93,13 +98,15 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool) -> Reply {
     }
     // Formats whose clients ask for something other than a stored file path.
     let mut wish_as: Option<String> = None;
+    let mut record_wish = true;
     match formats::route(app, req, tls, &repo_row, path) {
         formats::Route::Unhandled => {}
         formats::Route::Done(reply) => return reply,
         formats::Route::Redirect(location) => return Reply::empty(301, vec![("Location", location)]),
         formats::Route::Mapped { path, wish } => {
             candidates = vec![path];
-            wish_as = Some(wish);
+            record_wish = wish.is_some();
+            wish_as = wish;
         }
     }
     let mut entry: Option<EntryRec> = None;
@@ -124,7 +131,7 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool) -> Reply {
         // A miss is a wish only where the client asked for real content. apt
         // probes for optional index files; those are not recorded.
         let wish = wish_as.as_ref().or(candidates.last()).filter(|p| validate_path(p).is_ok());
-        if let (true, Some(path)) = (published, wish) {
+        if let (true, Some(path)) = (published && record_wish, wish) {
             if repo_row.format != "apt" || path.starts_with("pool/") {
                 app.metrics.misses.fetch_add(1, Ordering::Relaxed);
                 let _ = st.lookup_published(repo, path, true);

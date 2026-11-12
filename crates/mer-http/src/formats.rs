@@ -18,8 +18,9 @@ pub(crate) enum Route {
     Done(Reply),
     /// Send the client to the canonical URL.
     Redirect(String),
-    /// Serve `path` instead. If it is missing, record `wish` on the wishlist.
-    Mapped { path: String, wish: String },
+    /// Serve `path` instead. If it is missing, record `wish` on the wishlist
+    /// (`None`: a miss here is not a wish).
+    Mapped { path: String, wish: Option<String> },
 }
 
 /// PEP 503 name normalisation: lower-case, runs of `-`, `_`, `.` become `-`.
@@ -53,7 +54,7 @@ fn pypi(repo: &Repo, path: &str) -> Route {
     }
     let Some(rest) = path.strip_prefix("simple/") else { return Route::Unhandled };
     if rest.is_empty() {
-        return Route::Mapped { path: "simple/index.html".into(), wish: "simple".into() };
+        return Route::Mapped { path: "simple/index.html".into(), wish: None };
     }
     let (name, slash) = match rest.strip_suffix('/') {
         Some(n) => (n, true),
@@ -65,7 +66,7 @@ fn pypi(repo: &Repo, path: &str) -> Route {
         // "Foo_Bar" must lead to the same page as "foo-bar".
         return Route::Redirect(format!("/{}/simple/{norm}/", repo.name));
     }
-    Route::Mapped { path: format!("simple/{norm}/index.html"), wish: format!("simple/{norm}") }
+    Route::Mapped { path: format!("simple/{norm}/index.html"), wish: Some(format!("simple/{norm}")) }
 }
 
 /// npm package names: an optional `@scope/`, then URL-safe characters.
@@ -116,7 +117,7 @@ fn npm(app: &App, req: &Request, tls: bool, repo: &Repo, raw: &str) -> Route {
             return not_found();
         }
         let stored = format!("tarballs/{name}/{file}");
-        return Route::Mapped { wish: stored.clone(), path: stored };
+        return Route::Mapped { wish: Some(stored.clone()), path: stored };
     }
     if !npm_name(&path) {
         return not_found();
@@ -148,10 +149,150 @@ fn npm(app: &App, req: &Request, tls: bool, repo: &Repo, raw: &str) -> Route {
     }
 }
 
+// ------------------------------------------------------------ containers
+
+const API_VERSION: (&str, &str) = ("Docker-Distribution-API-Version", "registry/2.0");
+const MAX_MANIFEST: u64 = 4 << 20;
+
+fn oci_error(status: u16, code: &str, message: &str) -> Reply {
+    Reply::json(status, json!({ "errors": [{ "code": code, "message": message }] })).with(API_VERSION.0, API_VERSION.1)
+}
+
+fn oci_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name.split('/').all(|part| {
+            let b = part.as_bytes();
+            !b.is_empty()
+                && b[0].is_ascii_alphanumeric()
+                && b[b.len() - 1].is_ascii_alphanumeric()
+                && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'_' | b'-'))
+        })
+}
+
+fn oci_tag(tag: &str) -> bool {
+    let b = tag.as_bytes();
+    !b.is_empty()
+        && b.len() <= 128
+        && (b[0].is_ascii_alphanumeric() || b[0] == b'_')
+        && b.iter().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
+}
+
+/// `sha256:<64 lower-case hex>` -> the hex part.
+fn oci_digest(text: &str) -> Option<&str> {
+    let hex = text.strip_prefix("sha256:")?;
+    (hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))).then_some(hex)
+}
+
+fn small_blob(app: &App, repo: &Repo, path: &str) -> Result<Option<Vec<u8>>, ()> {
+    match app.st.lookup_published(&repo.name, path, false) {
+        Ok(Lookup::Found(entry)) => {
+            let mut body = Vec::new();
+            match app.st.open_blob(&entry.digest, None).map(|r| r.take(MAX_MANIFEST).read_to_end(&mut body)) {
+                Ok(Ok(_)) => Ok(Some(body)),
+                _ => Err(()),
+            }
+        }
+        Ok(_) => Ok(None),
+        Err(_) => Err(()),
+    }
+}
+
+/// The registry API root, and the hand-over to normal serving for the rest.
+pub(crate) fn oci_entry(app: &App, req: &Request, rest: &str, tls: bool) -> Reply {
+    if rest.is_empty() {
+        // Clients ping here first and only learn at this point that
+        // credentials are needed. If any image repository is private and the
+        // client sent none, ask for them now.
+        let needs_login = app.st.meta().read(|t| Ok(t.repo_list()?.iter().any(|r| r.format == "oci" && r.private))).unwrap_or(false);
+        if needs_login && header(req, "Authorization").is_none() {
+            return oci_error(401, "UNAUTHORIZED", "authentication required")
+                .with("WWW-Authenticate", "Basic realm=\"mirror-every-repo\"");
+        }
+        return Reply::json(200, json!({})).with(API_VERSION.0, API_VERSION.1);
+    }
+    let mut reply = crate::packages::serve(app, req, rest, tls, true);
+    reply.headers.push((API_VERSION.0, API_VERSION.1.to_string()));
+    reply
+}
+
+/// `<name>/manifests/<tag or digest>`, `<name>/blobs/<digest>`, `<name>/tags/list`.
+fn oci(app: &App, repo: &Repo, path: &str) -> Route {
+    let unknown = |code: &str, what: &str| Route::Done(oci_error(404, code, what));
+    let internal = || Route::Done(oci_error(500, "UNKNOWN", "internal error"));
+
+    if let Some(name) = path.strip_suffix("/tags/list") {
+        if !oci_name(name) {
+            return unknown("NAME_INVALID", "invalid repository name");
+        }
+        let prefix = format!("tags/{name}/");
+        return match app.st.list_published(&repo.name, &prefix, 10_000) {
+            Ok(entries) => {
+                let tags: Vec<&str> = entries.iter().filter_map(|e| e.path.strip_prefix(&prefix)).filter(|t| !t.contains('/')).collect();
+                if tags.is_empty() {
+                    unknown("NAME_UNKNOWN", "repository name not known to registry")
+                } else {
+                    Route::Done(Reply::json(200, json!({ "name": name, "tags": tags })))
+                }
+            }
+            Err(_) => internal(),
+        };
+    }
+    if let Some((name, digest)) = path.rsplit_once("/blobs/") {
+        return match (oci_name(name), oci_digest(digest)) {
+            // Layers are plain files of the snapshot: range requests and
+            // conditional requests work as for any other file.
+            (true, Some(hex)) => Route::Mapped { path: format!("blobs/sha256/{hex}"), wish: None },
+            _ => unknown("BLOB_UNKNOWN", "blob unknown to registry"),
+        };
+    }
+    let Some((name, reference)) = path.rsplit_once("/manifests/") else {
+        return unknown("UNSUPPORTED", "not a registry API path");
+    };
+    if !oci_name(name) {
+        return unknown("NAME_INVALID", "invalid repository name");
+    }
+    // A tag is a small file holding the digest it points at.
+    let hex = match oci_digest(reference) {
+        Some(hex) => hex.to_string(),
+        None if oci_tag(reference) => match small_blob(app, repo, &format!("tags/{name}/{reference}")) {
+            Ok(Some(body)) => match std::str::from_utf8(&body).ok().map(str::trim).and_then(oci_digest) {
+                Some(hex) => hex.to_string(),
+                None => return internal(),
+            },
+            Ok(None) => {
+                // An image or tag that is not mirrored: a wish.
+                app.metrics.misses.fetch_add(1, Ordering::Relaxed);
+                let _ = app.st.lookup_published(&repo.name, &format!("images/{name}:{reference}"), true);
+                return unknown("MANIFEST_UNKNOWN", "manifest unknown");
+            }
+            Err(()) => return internal(),
+        },
+        None => return unknown("MANIFEST_INVALID", "invalid reference"),
+    };
+    match small_blob(app, repo, &format!("manifests/{name}/sha256/{hex}")) {
+        Ok(Some(body)) => {
+            // The media type is part of the manifest; older ones leave it out.
+            let doc: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+            let media_type = doc["mediaType"].as_str().filter(|m| m.is_ascii() && !m.contains(['\r', '\n'])).map(str::to_string).unwrap_or_else(|| {
+                if doc["manifests"].is_array() { "application/vnd.oci.image.index.v1+json" } else { "application/vnd.oci.image.manifest.v1+json" }.to_string()
+            });
+            Route::Done(
+                Reply::bytes(200, &media_type, body)
+                    .with("Docker-Content-Digest", format!("sha256:{hex}"))
+                    .with("ETag", format!("\"sha256:{hex}\"")),
+            )
+        }
+        Ok(None) => unknown("MANIFEST_UNKNOWN", "manifest unknown"),
+        Err(()) => internal(),
+    }
+}
+
 pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str) -> Route {
     match repo.format.as_str() {
         "pypi" => pypi(repo, path),
         "npm" => npm(app, req, tls, repo, path),
+        "oci" => oci(app, repo, path),
         _ => Route::Unhandled,
     }
 }

@@ -701,6 +701,7 @@ dependencies = [
  "mer-fetch",
  "mer-format-apt",
  "mer-format-npm",
+ "mer-format-oci",
  "mer-format-pypi",
  "mer-http",
  "mer-meta",
@@ -830,6 +831,21 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "tempfile",
+ "thiserror",
+ "tiny_http",
+]
+
+[[package]]
+name = "mer-format-oci"
+version = "0.1.0"
+dependencies = [
+ "mer-blob",
+ "mer-core",
+ "mer-fetch",
+ "mer-meta",
+ "mer-storage",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tiny_http",
