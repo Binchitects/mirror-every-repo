@@ -700,6 +700,7 @@ dependencies = [
  "mer-crypto",
  "mer-fetch",
  "mer-format-apt",
+ "mer-format-pypi",
  "mer-http",
  "mer-meta",
  "mer-storage",

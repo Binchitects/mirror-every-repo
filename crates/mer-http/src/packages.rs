@@ -1,5 +1,5 @@
 //! Serving published snapshots to package clients.
-use crate::{header, percent_decode, App, Reply};
+use crate::{formats, header, percent_decode, App, Reply};
 use base64::Engine;
 use mer_blob::StoreError;
 use mer_core::{validate_path, EntryRec, EntryRole};
@@ -91,6 +91,16 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str) -> Reply {
                 .with("WWW-Authenticate", "Basic realm=\"mirror-every-repo\"");
         }
     }
+    // Formats whose clients ask for something other than a stored file path.
+    let mut wish_as: Option<String> = None;
+    match formats::route(&repo_row, path) {
+        formats::Route::Unhandled => {}
+        formats::Route::Redirect(location) => return Reply::empty(301, vec![("Location", location)]),
+        formats::Route::Mapped { path, wish } => {
+            candidates = vec![path];
+            wish_as = Some(wish);
+        }
+    }
     let mut entry: Option<EntryRec> = None;
     let mut published = true;
     for candidate in &candidates {
@@ -112,7 +122,7 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str) -> Reply {
     let Some(entry) = entry else {
         // A miss is a wish only where the client asked for real content. apt
         // probes for optional index files; those are not recorded.
-        let wish = candidates.last().filter(|p| validate_path(p).is_ok());
+        let wish = wish_as.as_ref().or(candidates.last()).filter(|p| validate_path(p).is_ok());
         if let (true, Some(path)) = (published, wish) {
             if repo_row.format != "apt" || path.starts_with("pool/") {
                 app.metrics.misses.fetch_add(1, Ordering::Relaxed);

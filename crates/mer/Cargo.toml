@@ -19,6 +19,7 @@ mer-transport-media.workspace = true
 mer-transport-diode.workspace = true
 mer-fetch.workspace = true
 mer-format-apt.workspace = true
+mer-format-pypi.workspace = true
 mer-http.workspace = true
 mer-auth.workspace = true
 rand.workspace = true
