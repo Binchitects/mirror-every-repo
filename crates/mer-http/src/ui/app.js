@@ -396,6 +396,7 @@ function repoCard(r, s) {
       r.private ? badge("token required", "warn") : badge("open"),
       h("span", { class: "muted" }, `${bytes(r.bytes)}${r.quota_bytes ? ` of ${bytes(r.quota_bytes)}` : ""}`),
       h("span", { class: "spacer" }),
+      h("button", { class: "btn", onclick: () => browseDialog(r) }, "Browse"),
       h("button", { class: "btn", onclick: () => clientSetupDialog(r) }, "Client setup"),
       can("admin") && h("button", { class: "btn", onclick: () => settingsDialog(r) }, "Settings")),
     table(["Snapshot", "State", { label: "Files", num: true }, { label: "Size", num: true }, "Sealed", ""], rows, "No snapshots yet."));
@@ -469,6 +470,57 @@ function clientSetupDialog(r) {
   confirmDialog(`Client setup for ${r.name}`, blocks, null, false);
 }
 
+// What a repository holds: its packages and versions, or its files, with a
+// search box. Shows what is published; if nothing is, the newest snapshot.
+function browseDialog(r) {
+  const hasPackages = r.format !== "raw";
+  let mode = hasPackages ? "packages" : "files";
+  const search = h("input", { type: "search", placeholder: "Search", "aria-label": "Search", autofocus: "" });
+  const summary = h("p", { class: "muted" });
+  const results = h("div", {});
+  const modeButtons = h("div", { class: "ranges", role: "group", "aria-label": "What to list" });
+  let latest = 0;
+  const load = async () => {
+    const mine = ++latest;
+    const q = search.value.trim();
+    try {
+      const data = await api(`repos/${encodeURIComponent(r.name)}/${mode}?limit=500${q ? `&q=${encodeURIComponent(q)}` : ""}`);
+      if (mine !== latest) return; // a newer search has been started
+      if (data.snapshot === null) {
+        summary.textContent = "This repository has no snapshot yet.";
+        results.replaceChildren();
+        return;
+      }
+      const where = `Snapshot #${data.snapshot}${r.live === data.snapshot ? " (published)" : " (not published)"}`;
+      if (mode === "packages") {
+        summary.textContent = `${where}: ${count(data.total_packages, "package", "packages")} in ${count(data.files, "file", "files")}, ${bytes(data.bytes)}.`
+          + (data.packages.length < data.total_packages ? ` Showing ${data.packages.length}.` : "");
+        results.replaceChildren(table(["Package", "Versions", { label: "Files", num: true }, { label: "Size", num: true }],
+          data.packages.map((p) => h("tr", {},
+            td(p.name, "path"),
+            td(p.versions.length > 8 ? `${p.versions.slice(-8).join(", ")} and ${p.versions.length - 8} older` : p.versions.join(", ")),
+            td(p.files, "num"), td(bytes(p.bytes), "num"))),
+          q ? "No package matches." : "No packages in this snapshot."));
+      } else {
+        summary.textContent = `${where}: ${count(data.files, "file", "files")}`
+          + (q ? `, ${data.matching} matching.` : ".") + (data.items.length < data.matching ? ` Showing the first ${data.items.length}.` : "");
+        results.replaceChildren(table(["Path", { label: "Size", num: true }, "SHA-256"],
+          data.items.map((f) => h("tr", {}, td(f.path, "path"), td(bytes(f.size), "num"), td(h("span", { title: f.sha256 }, f.sha256.slice(0, 16)), "mono"))),
+          q ? "No file matches." : "No files in this snapshot."));
+      }
+    } catch (err) {
+      if (mine === latest) results.replaceChildren(h("div", { class: "banner bad" }, err.message));
+    }
+  };
+  const drawModes = () => modeButtons.replaceChildren(...[["packages", "Packages"], ["files", "Files"]].filter(([id]) => hasPackages || id === "files").map(([id, label]) =>
+    h("button", { class: `btn ${mode === id ? "on" : ""}`, "aria-pressed": mode === id ? "true" : "false", onclick: () => { mode = id; drawModes(); load(); } }, label)));
+  let typing = null;
+  search.addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(load, 250); });
+  drawModes();
+  load();
+  confirmDialog(`Contents of ${r.name}`, [h("div", { class: "browse" }, modeButtons, search), summary, results], null, false);
+}
+
 async function reviewDialog(repo, seq) {
   let c;
   try { c = await api(`repos/${encodeURIComponent(repo)}/snapshots/${seq}/changes?limit=1000`); }
@@ -477,12 +529,24 @@ async function reviewDialog(repo, seq) {
   const summary = c.total === 0
     ? "Identical to what is published now."
     : `${count(c.added, "file", "files")} added, ${c.changed} changed, ${c.removed} removed. ${bytes(c.bytes)} of new content.`;
-  const body = [
-    h("p", {}, c.base ? `Compared with the published snapshot #${c.base}: ` : "Nothing is published yet, so everything is new: ", summary),
+  // The same changes as packages: what is new, what moves to another version, what goes.
+  const change = (p) => {
+    if (p.added.length && p.removed.length) return [badge("updated", "warn"), ` ${p.removed.join(", ")} to ${p.added.join(", ")}`];
+    if (p.added.length) return [badge("added", "good"), ` ${p.added.join(", ")}`];
+    return [badge("removed", "bad"), ` ${p.removed.join(", ")}`];
+  };
+  const files = [
     table(["", "Path", { label: "Size", num: true }], c.items.map((i) => h("tr", {},
       td(h("span", { class: `op-${i.op}`, title: i.op }, symbol[i.op])), td(i.path, "path"),
       td(i.op === "remove" ? "" : bytes(i.size), "num"))), "No differences."),
     c.total > c.items.length && h("p", { class: "muted" }, `Showing the first ${c.items.length} of ${c.total} changes.`),
+  ];
+  const body = [
+    h("p", {}, c.base ? `Compared with the published snapshot #${c.base}: ` : "Nothing is published yet, so everything is new: ", summary),
+    c.total_packages > 0 && h("h3", {}, count(c.total_packages, "package changes", "packages change")),
+    c.total_packages > 0 && table(["Package", "Change"], c.packages.map((p) => h("tr", {}, td(p.name, "path"), td(change(p)))), ""),
+    c.total_packages > c.packages.length && h("p", { class: "muted" }, `Showing the first ${c.packages.length} of ${c.total_packages} packages.`),
+    c.total_packages > 0 ? h("details", { class: "files" }, h("summary", {}, `Every changed file (${c.total})`), files) : files,
   ];
   await confirmDialog(`${repo} snapshot #${seq}`, body, null, false);
 }
@@ -539,12 +603,25 @@ async function transfersView() {
 // --------------------------------------------------------------- wishlist
 
 async function wishlistView() {
-  const rows = await api("wishlist");
+  const rows = await api("wishlist?limit=2000");
+  const act = async (path, body, done) => {
+    try { await api(path, body); flash("good", done); } catch (err) { flash("bad", err.message); }
+  };
   return h("div", {}, h("h2", {}, "Wishlist"),
-    h("p", { class: "muted" }, "Files that clients asked for and this vault does not have. Use it to decide what to mirror next."),
-    h("div", { class: "card" }, table(["Repository", "Path", { label: "Requests", num: true }, "Last asked"],
-      rows.map((m) => h("tr", {}, td(m.repo), td(m.path, "path"), td(m.count, "num"), td(when(m.last_at), "nowrap"))),
-      "No missing items have been requested.")));
+    h("p", { class: "muted" }, "What clients asked for and this vault does not have. The last column is what to add to the sync command on the collector so that the next bundle brings it."),
+    h("div", { class: "card" },
+      h("div", { class: "head" }, h("h3", {}, count(rows.length, "item", "items")), h("span", { class: "spacer" }),
+        rows.length > 0 && h("a", { class: "btn", href: "/api/wishlist/export", download: "wishlist.txt" }, "Download as text"),
+        rows.length > 0 && can("operator") && h("button", { class: "btn danger", onclick: async () => {
+          if (!(await confirmDialog("Clear the wishlist", [h("p", {}, "Every item is forgotten. Items come back when clients ask for them again.")], "Clear", true))) return;
+          act("wishlist/clear", {}, "Wishlist cleared.");
+        } }, "Clear all")),
+      table(["Repository", "Item", { label: "Requests", num: true }, "Last asked", "Add on the collector", ""],
+        rows.map((m) => h("tr", {}, td(m.repo), td(m.path, "path"), td(num(m.count), "num"), td(when(m.last_at), "nowrap"),
+          td(m.hint || "", "mono nowrap"),
+          td(h("div", { class: "actions" }, can("operator") && h("button", { class: "btn", title: "Forget this item",
+            onclick: () => act("wishlist/dismiss", { repo: m.repo, path: m.path }, `${m.path} dismissed.`) }, "Dismiss"))))),
+        "No missing items have been requested.")));
 }
 
 // ---------------------------------------------------------------- traffic

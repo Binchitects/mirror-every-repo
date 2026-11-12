@@ -122,3 +122,9 @@ dialog h3 { margin-top: 4px; }
 .chart details { margin-top: 10px; }
 .chart summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 .chart details .scroll { max-height: 260px; overflow-y: auto; margin-top: 6px; }
+.browse { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+.browse .ranges { margin-bottom: 0; }
+.browse input { flex: 1; min-width: 180px; }
+a.btn { text-decoration: none; display: inline-block; }
+details.files { margin-top: 12px; }
+details.files summary { cursor: pointer; color: var(--muted); margin-bottom: 6px; }

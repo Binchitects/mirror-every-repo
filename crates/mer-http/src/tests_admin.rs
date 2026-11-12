@@ -593,3 +593,110 @@ fn repositories_report_how_old_they_are_and_when_that_is_too_old() {
     }
     assert_eq!(Client::login(&r, "olga").post("/api/repos/tools/settings", json!({ "stale_after_days": 7 })).status, 403);
 }
+
+#[test]
+fn a_repository_can_be_browsed_by_package_and_searched_by_file() {
+    let r = rig();
+    r.st.create_repo("py", "pypi").unwrap();
+    let s = snapshot(
+        &r.st,
+        "py",
+        &[
+            ("simple/requests/index.html", b"<html>"),
+            ("packages/requests/requests-2.32.3-py3-none-any.whl", b"wheel"),
+            ("packages/requests/requests-2.32.3.tar.gz", b"sdist!"),
+            ("packages/requests/requests-2.31.0-py3-none-any.whl", b"older"),
+            ("packages/idna/idna-3.10-py3-none-any.whl", b"idna"),
+        ],
+    );
+    let c = Client::login(&r, "vic");
+    // Nothing is published, so the newest snapshot is listed.
+    let p = c.get("/api/repos/py/packages").json;
+    assert_eq!((p["snapshot"].as_u64(), p["files"].as_u64(), p["total_packages"].as_u64(), p["other_files"].as_u64()), (Some(s), Some(5), Some(2), Some(1)));
+    assert_eq!(p["packages"][1], json!({ "name": "requests", "versions": ["2.31.0", "2.32.3"], "files": 3, "bytes": 16 }));
+    assert_eq!(p["packages"][0]["name"], "idna");
+    let found = c.get("/api/repos/py/packages?q=REQ").json;
+    assert_eq!((found["packages"].as_array().unwrap().len(), found["total_packages"].as_u64()), (1, Some(2)));
+    assert_eq!(c.get("/api/repos/py/packages?q=nothing+like+this").json["packages"], json!([]));
+
+    let f = c.get("/api/repos/py/files?q=.tar.gz").json;
+    assert_eq!((f["files"].as_u64(), f["matching"].as_u64()), (Some(5), Some(1)));
+    assert_eq!(f["items"][0]["path"], "packages/requests/requests-2.32.3.tar.gz");
+    assert_eq!(f["items"][0]["sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(c.get("/api/repos/py/files?limit=2").json["items"].as_array().unwrap().len(), 2);
+    assert_eq!(c.get("/api/repos/py/files?q=%2e%2e%2f").json["matching"], 0);
+
+    // A named snapshot, and what is published once something is.
+    let tools = c.get("/api/repos/tools/files").json;
+    assert_eq!((tools["snapshot"].as_u64(), tools["files"].as_u64()), (Some(1), Some(2)), "the published snapshot, not the newer one in quarantine");
+    assert_eq!(c.get("/api/repos/tools/files?snapshot=2").json["files"], 2);
+    assert_eq!(c.get("/api/repos/tools/packages").json["total_packages"], 0, "a raw repository has files, not packages");
+    assert_eq!(c.get("/api/repos/nope/packages").status, 404);
+}
+
+#[test]
+fn a_review_summarises_the_changes_by_package() {
+    let r = rig();
+    r.st.create_repo("js", "npm").unwrap();
+    let s1 = snapshot(&r.st, "js", &[("packuments/express.json", b"{}"), ("tarballs/express/express-4.18.0.tgz", b"a"), ("tarballs/qs/qs-6.11.0.tgz", b"b")]);
+    r.st.decide("js", s1, true, "test").unwrap();
+    r.st.publish("js", s1, "test").unwrap();
+    let mut w = r.st.begin("js").unwrap();
+    for (path, body) in [("packuments/express.json", &b"{ }"[..]), ("tarballs/express/express-4.19.2.tgz", b"c"), ("tarballs/@types/node/node-20.1.0.tgz", b"d")] {
+        let (d, _) = r.st.ingest_bytes(body).unwrap();
+        w.put(path, Artifact, &d).unwrap();
+    }
+    w.remove("tarballs/express/express-4.18.0.tgz").unwrap();
+    w.remove("tarballs/qs/qs-6.11.0.tgz").unwrap();
+    let s2 = w.seal(None).unwrap().unwrap().seq;
+
+    let c = Client::login(&r, "vic");
+    let changes = c.get(&format!("/api/repos/js/snapshots/{s2}/changes")).json;
+    assert_eq!(changes["total"], 5);
+    assert_eq!(
+        changes["packages"],
+        json!([
+            { "name": "@types/node", "added": ["20.1.0"], "removed": [] },
+            { "name": "express", "added": ["4.19.2"], "removed": ["4.18.0"] },
+            { "name": "qs", "added": [], "removed": ["6.11.0"] },
+        ])
+    );
+}
+
+#[test]
+fn wishes_say_what_to_add_and_can_be_dismissed_cleared_and_exported() {
+    let r = rig();
+    r.st.create_repo("py", "pypi").unwrap();
+    let s = snapshot(&r.st, "py", &[("simple/requests/index.html", b"<html>")]);
+    r.st.decide("py", s, true, "test").unwrap();
+    r.st.publish("py", s, "test").unwrap();
+    let pkg = Client::new(&r);
+    for path in ["/py/simple/flask/", "/py/simple/flask/", "/py/simple/django/", "/tools/missing-1.0.tgz"] {
+        assert_eq!(pkg.get(path).status, 404);
+    }
+    let viewer = Client::login(&r, "vic");
+    let wishes = viewer.get("/api/wishlist").json;
+    assert_eq!(wishes[0]["path"], "simple/flask");
+    assert_eq!((wishes[0]["hint"].clone(), wishes[0]["format"].clone()), (json!("-r flask"), json!("pypi")));
+    assert_eq!(wishes.as_array().unwrap().iter().find(|w| w["repo"] == "tools").unwrap()["hint"], Value::Null);
+
+    let export = viewer.get("/api/wishlist/export");
+    assert_eq!(export.status, 200);
+    assert!(export.header("Content-Disposition").unwrap().contains("wishlist.txt"));
+    assert!(export.text.contains("py\t2\tsimple/flask\t-r flask\n"), "{}", export.text);
+    assert!(export.text.contains("tools\t1\tmissing-1.0.tgz\t\n"));
+    assert_eq!(Client::new(&r).get("/api/wishlist/export").status, 401);
+
+    // Viewers can look; operators tidy up.
+    assert_eq!(viewer.post("/api/wishlist/dismiss", json!({ "repo": "py", "path": "simple/flask" })).status, 403);
+    let op = Client::login(&r, "olga");
+    assert_eq!(op.post("/api/wishlist/dismiss", json!({ "repo": "py", "path": "simple/flask" })).status, 200);
+    assert_eq!(op.post("/api/wishlist/dismiss", json!({ "repo": "py", "path": "simple/flask" })).status, 404);
+    assert_eq!(viewer.get("/api/wishlist").json.as_array().unwrap().len(), 2);
+    assert_eq!(op.post("/api/wishlist/clear", json!({ "repo": "py" })).json["removed"], 1);
+    assert_eq!(op.post("/api/wishlist/clear", json!({})).json["removed"], 1);
+    assert_eq!(viewer.get("/api/wishlist").json, json!([]));
+    let audit = Client::login(&r, "admin").get("/api/audit").json;
+    let actions: Vec<&str> = audit["rows"].as_array().unwrap().iter().filter_map(|a| a["action"].as_str()).filter(|a| a.starts_with("wishlist.")).collect();
+    assert_eq!(actions.len(), 3, "each change to the wishlist is in the audit log");
+}

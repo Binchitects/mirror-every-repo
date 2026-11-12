@@ -9,6 +9,7 @@
 //! - **admin**: the web panel under `/ui/` and its JSON API under `/api/`,
 //!   for signed-in users only.
 mod api;
+mod catalog;
 mod formats;
 mod packages;
 #[cfg(test)]

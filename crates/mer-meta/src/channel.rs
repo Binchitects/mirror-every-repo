@@ -328,6 +328,19 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// Forget one wish. Returns whether it existed.
+    pub fn miss_delete(&self, repo: &str, path: &str) -> Result<bool> {
+        Ok(self.c.execute("DELETE FROM miss WHERE repo = ?1 AND path = ?2", params![repo, path])? > 0)
+    }
+
+    /// Forget every wish of one repository, or of all. Returns how many.
+    pub fn miss_clear_all(&self, repo: Option<&str>) -> Result<usize> {
+        Ok(match repo {
+            Some(r) => self.c.execute("DELETE FROM miss WHERE repo = ?1", params![r])?,
+            None => self.c.execute("DELETE FROM miss", [])?,
+        })
+    }
+
     /// Most requested first.
     pub fn miss_list(&self, limit: u32) -> Result<Vec<Miss>> {
         let mut st = self.c.prepare(
