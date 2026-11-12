@@ -2,6 +2,9 @@
 # End-to-end demo of the formats added in 1.1: mirror real packages on the
 # collector, carry them across, and use them with stock clients that have no
 # internet access.
+#
+#   bash deploy/demo-more.sh              every format: helm cargo go maven rpm
+#   bash deploy/demo-more.sh maven rpm    only these
 set -euo pipefail
 # If a step stops the script, say which command it was.
 trap 'echo "STOPPED at line $LINENO: $BASH_COMMAND" >&2' ERR
@@ -14,6 +17,8 @@ V="docker compose exec -T vault"
 HELM="docker compose exec -T helmclient"
 RUST="docker compose exec -T cargoclient"
 GO="docker compose exec -T goclient"
+MVN="docker compose exec -T mvnclient"
+RPM="docker compose exec -T rpmclient"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK: %s\n' "$*"; }
 fail() { printf '  FAILED: %s\n' "$*"; exit 1; }
@@ -26,24 +31,27 @@ carry() {
   $V mer import media "/media/b$SEQ" --auto-publish | tail -2
 }
 
-step "1. build the image and start the nodes"
+setup() {
+step "build the image and start the nodes"
 docker compose down -v --remove-orphans >/dev/null 2>&1 || true
 docker compose up -d --build 2>&1 | tail -3
 docker compose exec -T -u root collector chown mer:mer /media
 
-step "2. network isolation"
+step "network isolation"
 $C timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && ok "collector can reach the internet" || fail "collector needs internet for this demo"
 $V timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "vault can reach the internet" || ok "vault cannot reach the internet"
 $HELM timeout 5 nc -z 1.1.1.1 443 2>/dev/null && fail "helm client can reach the internet" || ok "helm client cannot reach the internet"
 
-step "3. pairing"
+step "pairing"
 $C mer init
 $V mer init
 PUB=$($C mer key gen /keys/bundle.key | tr -d '\r\n')
 $V mer key trust /data/trust.txt "$PUB"
 docker compose exec -T -d vault sh -c 'mer serve --listen 0.0.0.0:8080 > /tmp/http.log 2>&1'
+}
 
-step "4. Helm: mirror 'ingress-nginx' and 'cert-manager' from their chart repositories"
+demo_helm() {
+step "Helm: mirror 'ingress-nginx' and 'cert-manager' from their chart repositories"
 $C mer repo add nginx-charts --format helm
 # This repository keeps its chart archives on GitHub releases.
 $C mer helm sync nginx-charts --url https://kubernetes.github.io/ingress-nginx -c ingress-nginx --allow-host github.com
@@ -51,7 +59,7 @@ $C mer repo add jetstack --format helm
 $C mer helm sync jetstack --url https://charts.jetstack.io -c cert-manager -c 'cert-manager@~1.16'
 carry
 
-step "5. Helm: search, pull and render with a stock helm that can only reach the vault"
+step "Helm: search, pull and render with a stock helm that can only reach the vault"
 $HELM helm repo add nginx http://vault:8080/nginx-charts | sed 's/^/  | /'
 $HELM helm repo add jetstack http://vault:8080/jetstack | sed 's/^/  | /'
 $HELM helm search repo --versions | tr -d '\r' | cut -c1-70 | sed 's/^/  | /'
@@ -64,7 +72,7 @@ else ok "a version that is not mirrored cannot be pulled"; fi
 $HELM sh -c 'wget -q -O /dev/null http://vault:8080/jetstack/charts/cert-manager-1.12.0.tgz' 2>/dev/null || true
 case "$($V mer wishlist)" in *"charts/cert-manager-1.12.0"*) ok "a direct request for that chart is on the wishlist" ;; *) $V mer wishlist; fail "the chart is not on the wishlist" ;; esac
 
-step "6. Helm: a chart kept in an OCI registry, mirrored as a container repo"
+step "Helm: a chart kept in an OCI registry, mirrored as a container repo"
 $C mer repo add oci-charts --format oci
 SYNC=$($C mer oci sync oci-charts --registry https://ghcr.io -i stefanprodan/charts/podinfo:6.7.1 | tr -d '\r')
 echo "$SYNC"
@@ -72,13 +80,15 @@ UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
 carry
 OUT=$($HELM sh -c 'cd "$(mktemp -d)" && helm pull oci://vault:8080/oci-charts/stefanprodan/charts/podinfo --version 6.7.1 --plain-http --untar 2>&1 && grep "^version:" podinfo/Chart.yaml' | tr -d '\r')
 case "$OUT" in *"Digest: $UPSTREAM_DIGEST"*"version: 6.7.1"*) ok "helm pull oci:// from the vault gives the upstream digest ($UPSTREAM_DIGEST)" ;; *) echo "$OUT"; fail "the OCI chart was not pulled" ;; esac
+}
 
-step "7. Cargo: mirror 'serde' and 'serde_json' with their dependencies from crates.io"
+demo_cargo() {
+step "Cargo: mirror 'serde' and 'serde_json' with their dependencies from crates.io"
 $C mer repo add crates --format cargo
 $C mer cargo sync crates -p serde -p serde_json | grep -v WARNING
 carry
 
-step "8. Cargo: build and run with a stock cargo that can only reach the vault"
+step "Cargo: build and run with a stock cargo that can only reach the vault"
 $RUST timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "rust client can reach the internet" || ok "rust client cannot reach the internet"
 $RUST sh -c 'mkdir -p /tmp/app/src /tmp/app/.cargo'
 $RUST sh -c 'cat > /tmp/app/.cargo/config.toml' <<'TOML'
@@ -117,13 +127,15 @@ ok "$LOCKED crates in Cargo.lock, each checked by cargo against the checksum in 
 if $RUST sh -c 'cd /tmp/app && cargo add rand' >/dev/null 2>&1; then fail "rand was usable although it is not mirrored"
 else ok "a crate that is not mirrored cannot be added"; fi
 case "$($V mer wishlist)" in *"crates  rand"*) ok "the request for rand is on the wishlist" ;; *) $V mer wishlist; fail "rand is not on the wishlist" ;; esac
+}
 
-step "9. Go: mirror 'github.com/gin-gonic/gin' v1.10.0 from proxy.golang.org, checked against sum.golang.org"
+demo_go() {
+step "Go: mirror 'github.com/gin-gonic/gin' v1.10.0 from proxy.golang.org, checked against sum.golang.org"
 $C mer repo add go --format go
 $C mer go sync go -m github.com/gin-gonic/gin@v1.10.0
 carry
 
-step "10. Go: get, build and run with a stock go that can only reach the vault"
+step "Go: get, build and run with a stock go that can only reach the vault"
 $GO timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "go client can reach the internet" || ok "go client cannot reach the internet"
 $GO sh -c 'mkdir -p /tmp/app && cd /tmp/app && go mod init app >/dev/null 2>&1'
 $GO sh -c 'cat > /tmp/app/main.go' <<'GOSRC'
@@ -146,19 +158,144 @@ func main() {
 }
 GOSRC
 $GO sh -c 'cd /tmp/app && go get github.com/gin-gonic/gin@v1.10.0 2>&1' | tail -3 | sed 's/^/  | /'
-OUT=$($GO sh -c 'cd /tmp/app && go run . 2>&1' | tr -d '')
+OUT=$($GO sh -c 'cd /tmp/app && go run . 2>&1' | tr -d '
+')
 case "$OUT" in '{"from":"the vault"} v1.10.0') ok "gin was fetched from the vault, compiled and ran: $OUT" ;; *) echo "$OUT" | tail -15; fail "the program did not run" ;; esac
-SUMS=$($GO sh -c 'grep -c "" /tmp/app/go.sum' | tr -d '')
+SUMS=$($GO sh -c 'grep -c "" /tmp/app/go.sum' | tr -d '
+')
 ok "$SUMS lines in go.sum"
-OUT=$($GO sh -c 'cd /tmp/app && go mod verify 2>&1' | tr -d '')
+OUT=$($GO sh -c 'cd /tmp/app && go mod verify 2>&1' | tr -d '
+')
 case "$OUT" in "all modules verified") ok "go mod verify: $OUT" ;; *) echo "$OUT"; fail "go mod verify failed" ;; esac
 if $GO sh -c 'cd /tmp/app && go get github.com/google/uuid' >/dev/null 2>&1; then fail "uuid was usable although it is not mirrored"
 else ok "a module that is not mirrored cannot be fetched"; fi
 case "$($V mer wishlist)" in *"github.com/google/uuid"*) ok "the request for github.com/google/uuid is on the wishlist" ;; *) $V mer wishlist; fail "uuid is not on the wishlist" ;; esac
+}
 
+demo_maven() {
+step "Maven: mirror two libraries and the build plugins from Maven Central"
+$C mer repo add m2 --format maven
+# Plugins are artifacts too: the ones a 'mvn package' of a jar project runs.
+$C mer maven sync m2 -a org.apache.commons:commons-lang3:3.14.0 -a com.google.guava:guava:33.0.0-jre   -a org.apache.maven.plugins:maven-resources-plugin:3.3.1 -a org.apache.maven.plugins:maven-compiler-plugin:3.13.0   -a org.apache.maven.plugins:maven-surefire-plugin:3.2.5 -a org.apache.maven.plugins:maven-jar-plugin:3.4.1
+carry
+
+step "Maven: build and run with a stock mvn that can only reach the vault"
+$MVN timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "maven client can reach the internet" || ok "maven client cannot reach the internet"
+$MVN sh -c 'mkdir -p /tmp/app/src/main/java/demo /root/.m2'
+$MVN sh -c 'cat > /root/.m2/settings.xml' <<'XML'
+<settings>
+  <mirrors>
+    <mirror>
+      <id>vault</id>
+      <mirrorOf>*</mirrorOf>
+      <url>http://vault:8080/m2</url>
+    </mirror>
+  </mirrors>
+</settings>
+XML
+$MVN sh -c 'cat > /tmp/app/pom.xml' <<'XML'
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>demo</groupId>
+  <artifactId>app</artifactId>
+  <version>1.0</version>
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.apache.commons</groupId><artifactId>commons-lang3</artifactId><version>3.14.0</version></dependency>
+    <dependency><groupId>com.google.guava</groupId><artifactId>guava</artifactId><version>33.0.0-jre</version></dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin><artifactId>maven-resources-plugin</artifactId><version>3.3.1</version></plugin>
+      <plugin><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin>
+      <plugin><artifactId>maven-surefire-plugin</artifactId><version>3.2.5</version></plugin>
+      <plugin><artifactId>maven-jar-plugin</artifactId><version>3.4.1</version></plugin>
+    </plugins>
+  </build>
+</project>
+XML
+$MVN sh -c 'cat > /tmp/app/src/main/java/demo/Main.java' <<'JAVA'
+package demo;
+
+import com.google.common.collect.ImmutableList;
+import org.apache.commons.lang3.StringUtils;
+
+public class Main {
+    public static void main(String[] args) {
+        System.out.println(StringUtils.capitalize(String.join(" ", ImmutableList.of("hello", "from", "the", "vault"))));
+    }
+}
+JAVA
+BUILD=$($MVN sh -c 'cd /tmp/app && mvn -B -q package -DskipTests 2>&1; ls target/app-1.0.jar 2>&1' | tr -d '
+')
+case "$BUILD" in "target/app-1.0.jar") ok "mvn package succeeded: libraries and build plugins all came from the vault" ;; *) echo "$BUILD" | tail -15; fail "mvn package failed" ;; esac
+OUT=$($MVN sh -c 'cd /tmp/app && java -cp "target/classes:$(find /root/.m2/repository -name "*.jar" | tr "
+" ":")" demo.Main' | tr -d '
+')
+[ "$OUT" = "Hello from the vault" ] && ok "the program runs: $OUT" || fail "the program did not run: $OUT"
+JARS=$($MVN sh -c 'find /root/.m2/repository -name "*.jar" | wc -l' | tr -d '
+ ')
+ok "$JARS jars in the local repository, each checked by mvn against the SHA-1 the vault serves"
+$MVN sh -c 'cd /tmp/app && sed -i "s#</dependencies>#<dependency><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId><version>2.0.13</version></dependency></dependencies>#" pom.xml'
+if $MVN sh -c 'cd /tmp/app && mvn -B -q package -DskipTests' >/dev/null 2>&1; then fail "slf4j-api was usable although it is not mirrored"
+else ok "an artifact that is not mirrored cannot be used"; fi
+case "$($V mer wishlist)" in *"org.slf4j:slf4j-api:2.0.13"*) ok "the request for org.slf4j:slf4j-api:2.0.13 is on the wishlist" ;; *) $V mer wishlist; fail "slf4j-api is not on the wishlist" ;; esac
+}
+
+demo_rpm() {
+step "RPM: mirror 'jq' and what it needs from Rocky Linux 9 (BaseOS and AppStream)"
+# The distribution's public key, taken from its own image. With it the
+# collector requires and verifies the signature on the upstream metadata.
+docker run --rm rockylinux:9 cat /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9 | docker compose exec -T collector sh -c 'cat > /keys/RPM-GPG-KEY-Rocky-9'
+# The site key signs the metadata of the mirrored repository.
+$C mer apt keygen >/dev/null   # the key is kept in /keys/gnupg
+$C mer repo add rocky --format rpm
+$C mer rpm sync rocky --url https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os --url https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os   -p jq --keyring /keys/RPM-GPG-KEY-Rocky-9 --sign-home /keys/gnupg
+carry
+
+step "RPM: install with a stock dnf that can only reach the vault"
+$RPM timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "rpm client can reach the internet" || ok "rpm client cannot reach the internet"
+# Packages are checked against the distribution's key (they are stored
+# unchanged); the repository metadata against the site key.
+$RPM sh -c 'cat > /etc/yum.repos.d/vault.repo' <<'REPO'
+[vault]
+name=Vault
+baseurl=http://vault:8080/rocky/
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+       http://vault:8080/rocky/keys/site.asc
+REPO
+DNF="dnf -y --disablerepo=* --enablerepo=vault"
+$RPM sh -c 'rpm -q jq' >/dev/null 2>&1 && fail "jq is already installed" || ok "jq is not installed yet"
+$RPM sh -c "$DNF install jq" 2>&1 | grep -E 'Importing GPG key|Userid|Installed:|^  [a-z]' | sed 's/^/  | /'
+OUT=$($RPM sh -c 'echo "{\"from\":\"the vault\"}" | jq -r .from' | tr -d '
+')
+[ "$OUT" = "the vault" ] && ok "jq was installed from the vault and runs" || fail "jq did not run: $OUT"
+SIG=$($RPM sh -c 'rpm -qi jq | grep -i "^Signature"' | tr -d '
+')
+case "$SIG" in *"Key ID"*) ok "the package carries the distribution's signature: ${SIG#*: }" ;; *) fail "jq is not signed: $SIG" ;; esac
+if $RPM sh -c "$DNF install htop" >/dev/null 2>&1; then fail "htop was installable although it is not mirrored"
+else ok "a package that is not mirrored cannot be installed"; fi
+}
+
+finish() {
 step "vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log' | sed 's/^/  requests answered with 200: /'
 
-step "DONE: all checks passed"
+}
+
+SECTIONS="${*:-helm cargo go maven rpm}"
+for s in $SECTIONS; do
+  case "$s" in helm|cargo|go|maven|rpm) ;; *) fail "unknown section '$s' (there are: helm cargo go maven rpm)" ;; esac
+done
+setup
+for s in $SECTIONS; do "demo_$s"; done
+finish
+step "DONE: all checks passed ($SECTIONS)"

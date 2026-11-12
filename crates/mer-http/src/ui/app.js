@@ -438,6 +438,21 @@ function clientSetupDialog(r) {
       "  </packageSources>", "</configuration>",
     ]);
     if (r.private) add("Token", [`dotnet nuget add source ${base}/v3/index.json --name vault --username any --password <token> --store-password-in-clear-text${insecure}`]);
+  } else if (r.format === "rpm") {
+    add(`In /etc/yum.repos.d/vault-${r.name}.repo`, [
+      `[vault-${r.name}]`, `name=Vault ${r.name}`, `baseurl=${base}/`, "enabled=1",
+      "# Packages keep the signature of their distribution: point gpgkey at its key.",
+      "gpgcheck=1", "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-<distribution>",
+    ].concat(r.private ? ["username=token", "password=<token>"] : []));
+    add("If the metadata is signed with the site key (sync with --sign-home), also", ["repo_gpgcheck=1", `# and add ${base}/keys/site.asc to gpgkey`]);
+    add("Then, with the distribution's own repositories switched off", [`dnf --disablerepo='*' --enablerepo=vault-${r.name} install <package>`]);
+  } else if (r.format === "maven") {
+    add("In ~/.m2/settings.xml: use the vault for everything", [
+      "<settings>", "  <mirrors>", "    <mirror>", "      <id>vault</id>", "      <mirrorOf>*</mirrorOf>", `      <url>${base}</url>`,
+      "    </mirror>", "  </mirrors>",
+    ].concat(r.private ? ["  <servers>", "    <server>", "      <id>vault</id>", "      <username>token</username>", "      <password><token></password>", "    </server>", "  </servers>"] : [], ["</settings>"]));
+    add("Gradle, in settings.gradle", ["dependencyResolutionManagement {", `  repositories { maven { url = uri("${base}")${secure ? "" : "; allowInsecureProtocol = true"} } }`, "}"]);
+    add("Then build as usual", ["mvn package"]);
   } else if (r.format === "go") {
     add("Point the go command at the vault (once per client)", [
       `go env -w GOPROXY=${base}`,

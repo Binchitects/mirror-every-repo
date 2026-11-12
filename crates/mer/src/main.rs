@@ -103,6 +103,16 @@ enum Cmd {
         #[command(subcommand)]
         cmd: GoCmd,
     },
+    /// Maven repositories for Java and other JVM languages (collector side).
+    Maven {
+        #[command(subcommand)]
+        cmd: MavenCmd,
+    },
+    /// RPM repositories for dnf and yum (collector side).
+    Rpm {
+        #[command(subcommand)]
+        cmd: RpmCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -334,6 +344,70 @@ enum GoCmd {
         /// (for a private proxy whose modules the database does not know).
         #[arg(long)]
         no_sumdb: bool,
+        /// Additional host the collector may contact (repeatable).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum MavenCmd {
+    /// Mirror artifacts and what they depend on into a new snapshot of a maven repo.
+    Sync {
+        repo: String,
+        /// The upstream repository.
+        #[arg(long, default_value = "https://repo.maven.apache.org/maven2")]
+        url: String,
+        /// What to mirror (repeatable): group:artifact:version, or
+        /// group:artifact for the version a --bom manages, else the latest
+        /// release. Build plugins are artifacts too and are named the same way.
+        #[arg(long = "artifact", short = 'a', required = true)]
+        artifacts: Vec<String>,
+        /// A BOM (group:artifact:version) that the projects inside the air
+        /// gap import (repeatable). The versions it manages are used
+        /// throughout, as they are in those projects.
+        #[arg(long = "bom")]
+        boms: Vec<String>,
+        /// Also mirror these files next to each jar where they exist
+        /// (repeatable): sources, javadoc.
+        #[arg(long = "classifier")]
+        classifiers: Vec<String>,
+        /// Additional host the collector may contact (repeatable).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RpmCmd {
+    /// Mirror packages and what they need into a new snapshot of an rpm repo.
+    Sync {
+        repo: String,
+        /// An upstream repository: the directory that holds repodata/
+        /// (repeatable). Dependencies are resolved across all of them and
+        /// they become one repository on the vault.
+        #[arg(long = "url", required = true)]
+        urls: Vec<String>,
+        /// Package to mirror (repeatable): a name, or something a package
+        /// provides, such as /usr/bin/git. What it needs is added.
+        #[arg(long = "package", short = 'p', required = true)]
+        packages: Vec<String>,
+        /// Architecture of the machines inside the air gap (repeatable,
+        /// best first). noarch packages are always included.
+        #[arg(long = "arch", default_value = "x86_64")]
+        archs: Vec<String>,
+        /// Also mirror what packages recommend, as dnf installs by default.
+        #[arg(long)]
+        recommends: bool,
+        /// Public keys of the upstream repositories (the distribution's
+        /// RPM-GPG-KEY file). With it, the signature of the upstream
+        /// metadata is required and verified.
+        #[arg(long)]
+        keyring: Option<PathBuf>,
+        /// Sign the metadata of the mirrored repository with the site key
+        /// in this GnuPG home (created with `mer apt keygen`).
+        #[arg(long)]
+        sign_home: Option<PathBuf>,
         /// Additional host the collector may contact (repeatable).
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
@@ -1291,6 +1365,67 @@ fn main() -> Result<()> {
                 match &cfg.sumdb_url {
                     Some(url) => println!("{} files compared with the checksum database at {url}", rep.verified),
                     None => println!("  WARNING: the checksum database was not consulted"),
+                }
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Maven { cmd } => match cmd {
+            MavenCmd::Sync { repo, url, artifacts, boms, classifiers, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                hosts.push(mer_fetch::host_of(&url).ok_or_else(|| anyhow!("{url:?} is not an http(s) URL"))?);
+                let client = mer_fetch::HttpClient::new(&hosts);
+                let cfg = mer_format_maven::MavenConfig { repo_url: url, artifacts, boms, classifiers };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.repo_url, hosts.join(", "));
+                let rep = mer_format_maven::sync(&st, &repo, &client, &cfg)?;
+                println!(
+                    "{} artifact files, {} POMs; downloaded {} files ({}), {} already mirrored",
+                    rep.artifacts,
+                    rep.poms,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused
+                );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Rpm { cmd } => match cmd {
+            RpmCmd::Sync { repo, urls, packages, archs, recommends, keyring, sign_home, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                for url in &urls {
+                    hosts.push(mer_fetch::host_of(url).ok_or_else(|| anyhow!("{url:?} is not an http(s) URL"))?);
+                }
+                hosts.sort();
+                hosts.dedup();
+                let client = mer_fetch::HttpClient::new(&hosts);
+                let cfg = mer_format_rpm::RpmConfig { repo_urls: urls, packages, archs, recommends, keyring, sign_home };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.repo_urls.join(", "), hosts.join(", "));
+                let rep = mer_format_rpm::sync(&st, &repo, &client, &cfg)?;
+                println!(
+                    "{} of {} packages; downloaded {} ({}), {} already in the store",
+                    rep.packages,
+                    rep.available,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused
+                );
+                if rep.signatures_verified {
+                    println!("upstream metadata signatures verified");
+                } else {
+                    println!("  WARNING: upstream metadata signatures were not checked (no --keyring)");
                 }
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");

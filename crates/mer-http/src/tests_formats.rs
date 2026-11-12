@@ -431,3 +431,33 @@ fn go_proxy_paths_are_served_and_missing_versions_become_wishes() {
     wished.sort();
     assert_eq!(wished, vec![("ex.com/Other".to_string(), 2), ("ex.com/lib@v2.0.0".to_string(), 1)]);
 }
+
+#[test]
+fn maven_repositories_serve_their_files_and_a_missing_pom_is_a_wish() {
+    let r = rig(
+        "m2",
+        "maven",
+        &[("org/ex/lib/1.0/lib-1.0.pom", b"<project/>"), ("org/ex/lib/1.0/lib-1.0.jar", b"jar"), ("org/ex/lib/1.0/lib-1.0.jar.sha1", b"abc"), ("org/ex/lib/maven-metadata.xml", b"<metadata/>")],
+    );
+    assert_eq!(get(&r, "/m2/org/ex/lib/1.0/lib-1.0.pom").1, "<project/>");
+    assert_eq!(get(&r, "/m2/org/ex/lib/1.0/lib-1.0.jar").1, "jar");
+    assert_eq!(get(&r, "/m2/org/ex/lib/1.0/lib-1.0.jar.sha1").1, "abc");
+    assert_eq!(get(&r, "/m2/org/ex/lib/maven-metadata.xml").1, "<metadata/>");
+    // Maven asks for the POM first; the other misses that follow are not wishes of their own.
+    for path in ["/m2/com/google/guava/guava/33.0.0-jre/guava-33.0.0-jre.pom", "/m2/com/google/guava/guava/33.0.0-jre/guava-33.0.0-jre.pom.sha1", "/m2/com/google/guava/guava/33.0.0-jre/guava-33.0.0-jre.jar", "/m2/org/ex/lib/2.0/other-2.0.pom", "/m2/org/ex/nope/maven-metadata.xml", "/m2/..%2f..%2fmeta.db"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![("com.google.guava:guava:33.0.0-jre".to_string(), 1)]);
+}
+
+#[test]
+fn rpm_repositories_are_served_as_their_files() {
+    let r = rig("el", "rpm", &[("repodata/repomd.xml", b"<repomd/>"), ("Packages/b/bash-5.1.8-9.el9.x86_64.rpm", b"rpm")]);
+    assert_eq!(get(&r, "/el/repodata/repomd.xml").1, "<repomd/>");
+    assert_eq!(get(&r, "/el/Packages/b/bash-5.1.8-9.el9.x86_64.rpm").1, "rpm");
+    // dnf probes for files a repository may or may not have; those are not wishes.
+    for path in ["/el/repodata/repomd.xml.asc", "/el/Packages/h/htop-3.2.2-1.el9.x86_64.rpm", "/el/..%2fmeta.db"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![]);
+}

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
 mer-core.workspace = true
 mer-blob.workspace = true
 mer-meta.workspace = true

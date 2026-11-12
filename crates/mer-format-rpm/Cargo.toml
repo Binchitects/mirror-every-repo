@@ -1,0 +1,26 @@
+[package]
+name = "mer-format-rpm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-blob.workspace = true
+mer-meta.workspace = true
+mer-storage.workspace = true
+mer-fetch.workspace = true
+# Signature checks (gpgv) and the site key are shared with the apt format.
+mer-format-apt.workspace = true
+roxmltree.workspace = true
+flate2.workspace = true
+ruzstd.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tiny_http.workspace = true
+serde_json.workspace = true

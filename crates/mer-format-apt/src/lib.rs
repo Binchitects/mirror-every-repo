@@ -16,7 +16,7 @@ mod version;
 
 pub use closure::{parse_depends, Closure, Index};
 pub use control::{parse_stanzas, Stanza};
-pub use gpg::{verify_inrelease, SiteKey};
+pub use gpg::{verify_detached, verify_inrelease, SiteKey};
 pub use release::{parse_release, Release, ReleaseFile};
 pub use sync::{sync, AptConfig, SyncReport};
 pub use version::compare_versions;
