@@ -13,6 +13,7 @@ C="docker compose exec -T collector"
 V="docker compose exec -T vault"
 PY="docker compose exec -T pyclient"
 NODE="docker compose exec -T nodeclient"
+NET="docker compose exec -T dotnetclient"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK: %s\n' "$*"; }
 fail() { printf '  FAILED: %s\n' "$*"; exit 1; }
@@ -85,14 +86,57 @@ if $NODE sh -c "cd /tmp/app && $NPM left-pad" >/dev/null 2>&1; then fail "left-p
 else ok "a package that is not mirrored cannot be installed"; fi
 case "$($V mer wishlist)" in *"npm  left-pad"*) ok "the request for left-pad is on the wishlist" ;; *) $V mer wishlist; fail "left-pad is not on the wishlist" ;; esac
 
-step "9. Containers: mirror 'alpine:3.20' from Docker Hub"
+step "9. NuGet: mirror 'Serilog.Sinks.Console' for net8.0 from nuget.org"
+$C mer repo add nuget --format nuget
+$C mer nuget sync nuget --framework net8.0 -p Serilog.Sinks.Console
+carry
+
+step "10. NuGet: restore, build and run with a stock dotnet SDK that can only reach the vault"
+$NET timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "dotnet client can reach the internet" || ok "dotnet client cannot reach the internet"
+$NET sh -c 'rm -rf /tmp/app && dotnet new console -n app -o /tmp/app --no-restore >/dev/null'
+# The vault is the only package source; a version of "*" means "newest the feed has".
+$NET sh -c 'cat > /tmp/app/nuget.config' <<'XML'
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="vault" value="http://vault:8080/nuget/v3/index.json" allowInsecureConnections="true" />
+  </packageSources>
+</configuration>
+XML
+$NET sh -c 'cat > /tmp/app/app.csproj' <<'XML'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Serilog.Sinks.Console" Version="*" />
+  </ItemGroup>
+</Project>
+XML
+$NET sh -c 'cat > /tmp/app/Program.cs' <<'CS'
+using Serilog;
+Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateLogger();
+Log.Information("hello from the vault");
+Log.CloseAndFlush();
+CS
+$NET sh -c 'cd /tmp/app && dotnet restore' 2>&1 | tail -2 | sed 's/^/  | /'
+OUT=$($NET sh -c 'cd /tmp/app && dotnet run --no-restore' 2>&1 | tr -d '\r')
+case "$OUT" in *"hello from the vault"*) ok "restored from the vault, built and ran: ${OUT##*] }" ;; *) echo "$OUT"; fail "the program did not run" ;; esac
+$NET sh -c 'ls /root/.nuget/packages' | tr -d '\r' | tr '\n' ' ' | sed 's/^/  packages restored: /'; echo
+if $NET sh -c 'cd /tmp/app && dotnet add package Dapper --version 2.1.35' >/dev/null 2>&1; then fail "Dapper was restorable although it is not mirrored"
+else ok "a package that is not mirrored cannot be restored"; fi
+case "$($V mer wishlist)" in *"nuget  dapper"*) ok "the request for Dapper is on the wishlist" ;; *) $V mer wishlist; fail "Dapper is not on the wishlist" ;; esac
+
+step "11. Containers: mirror 'alpine:3.20' from Docker Hub"
 $C mer repo add hub --format oci
 SYNC=$($C mer oci sync hub -i library/alpine:3.20 | tr -d '\r')
 echo "$SYNC"
 UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
 carry
 
-step "10. Containers: pull and run with a real Docker engine, from the vault only"
+step "12. Containers: pull and run with a real Docker engine, from the vault only"
 # The vault itself has no published ports (its network is internal), so a
 # second server process on the same vault data is exposed on localhost for
 # the Docker engine of this machine. The image is pulled under a name that
@@ -113,7 +157,7 @@ case "$($V mer wishlist)" in *"images/library/busybox:latest"*) ok "the request 
 docker rmi -f "$IMG" >/dev/null 2>&1 || true
 docker rm -f mer-registry >/dev/null 2>&1 || true
 
-step "11. vault: state and integrity"
+step "13. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log' | sed 's/^/  requests answered with 200: /'

@@ -263,6 +263,15 @@ function clientSetupDialog(r) {
   } else if (r.format === "npm") {
     add("Point npm at the vault", [`npm config set registry ${base}/`]);
     if (r.private) add("Token, in .npmrc", [`//${host}/${r.name}/:_authToken=<token>`]);
+  } else if (r.format === "nuget") {
+    const insecure = secure ? "" : " --allow-insecure-connections";
+    add("Add the vault as a package source", [`dotnet nuget add source ${base}/v3/index.json --name vault${insecure}`]);
+    add("Or in nuget.config, as the only source", [
+      "<configuration>", "  <packageSources>", "    <clear />",
+      `    <add key="vault" value="${base}/v3/index.json"${secure ? "" : ' allowInsecureConnections="true"'} />`,
+      "  </packageSources>", "</configuration>",
+    ]);
+    if (r.private) add("Token", [`dotnet nuget add source ${base}/v3/index.json --name vault --username any --password <token> --store-password-in-clear-text${insecure}`]);
   } else if (r.format === "oci") {
     add("Pull an image", [`docker pull ${host}/${r.name}/<image>:<tag>`, `# for example: docker pull ${host}/${r.name}/library/alpine:3.20`]);
     if (!secure) add("Plain HTTP needs to be allowed on the client (or serve with TLS)", ['# /etc/docker/daemon.json', `{ "insecure-registries": ["${host}"] }`]);
