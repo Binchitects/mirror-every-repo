@@ -272,6 +272,13 @@ function clientSetupDialog(r) {
       "  </packageSources>", "</configuration>",
     ]);
     if (r.private) add("Token", [`dotnet nuget add source ${base}/v3/index.json --name vault --username any --password <token> --store-password-in-clear-text${insecure}`]);
+  } else if (r.format === "cargo") {
+    add("In .cargo/config.toml (of the project, or of the user: ~/.cargo/config.toml)", [
+      "[source.crates-io]", 'replace-with = "vault"', "",
+      "[registries.vault]", `index = "sparse+${base}/index/"`,
+    ].concat(r.private ? ['credential-provider = ["cargo:token"]'] : []));
+    if (r.private) add("Token, in ~/.cargo/credentials.toml (mode 600)", ["[registries.vault]", 'token = "Bearer <token>"']);
+    add("Then build as usual", ["cargo build"]);
   } else if (r.format === "helm") {
     const insecureNote = secure ? [] : ["# plain HTTP: helm accepts it as is; with a private CA add --ca-file"];
     add("Add the vault as a chart repository", [`helm repo add vault ${base}`, "helm repo update"].concat(insecureNote));

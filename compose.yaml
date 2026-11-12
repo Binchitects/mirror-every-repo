@@ -73,6 +73,13 @@ services:
     networks: [diode]
     profiles: [more]
 
+  cargoclient:
+    image: rust:1.99-bookworm
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [more]
+
 networks:
   internet: {}
   diode:

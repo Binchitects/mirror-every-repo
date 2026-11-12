@@ -26,6 +26,7 @@ mer-format-npm = { path = "crates/mer-format-npm" }
 mer-format-oci = { path = "crates/mer-format-oci" }
 mer-format-nuget = { path = "crates/mer-format-nuget" }
 mer-format-helm = { path = "crates/mer-format-helm" }
+mer-format-cargo = { path = "crates/mer-format-cargo" }
 mer-http = { path = "crates/mer-http" }
 mer-auth = { path = "crates/mer-auth" }
 
@@ -35,6 +36,7 @@ base64 = "0.22"
 sha1 = "0.10"
 libc = "0.2"
 serde_yaml = "0.9"
+semver = "1"
 
 ureq = "2"
 tiny_http = { version = "0.12", features = ["ssl-rustls"] }

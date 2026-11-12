@@ -26,6 +26,7 @@ mer-format-npm.workspace = true
 mer-format-oci.workspace = true
 mer-format-nuget.workspace = true
 mer-format-helm.workspace = true
+mer-format-cargo.workspace = true
 mer-http.workspace = true
 mer-auth.workspace = true
 rand.workspace = true

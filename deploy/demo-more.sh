@@ -12,6 +12,7 @@ cd "$(dirname "$0")/.."
 C="docker compose exec -T collector"
 V="docker compose exec -T vault"
 HELM="docker compose exec -T helmclient"
+RUST="docker compose exec -T cargoclient"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK: %s\n' "$*"; }
 fail() { printf '  FAILED: %s\n' "$*"; exit 1; }
@@ -70,6 +71,49 @@ UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
 carry
 OUT=$($HELM sh -c 'cd "$(mktemp -d)" && helm pull oci://vault:8080/oci-charts/stefanprodan/charts/podinfo --version 6.7.1 --plain-http --untar 2>&1 && grep "^version:" podinfo/Chart.yaml' | tr -d '\r')
 case "$OUT" in *"Digest: $UPSTREAM_DIGEST"*"version: 6.7.1"*) ok "helm pull oci:// from the vault gives the upstream digest ($UPSTREAM_DIGEST)" ;; *) echo "$OUT"; fail "the OCI chart was not pulled" ;; esac
+
+step "7. Cargo: mirror 'serde' and 'serde_json' with their dependencies from crates.io"
+$C mer repo add crates --format cargo
+$C mer cargo sync crates -p serde -p serde_json | grep -v WARNING
+carry
+
+step "8. Cargo: build and run with a stock cargo that can only reach the vault"
+$RUST timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "rust client can reach the internet" || ok "rust client cannot reach the internet"
+$RUST sh -c 'mkdir -p /tmp/app/src /tmp/app/.cargo'
+$RUST sh -c 'cat > /tmp/app/.cargo/config.toml' <<'TOML'
+[source.crates-io]
+replace-with = "vault"
+
+[registries.vault]
+index = "sparse+http://vault:8080/crates/index/"
+TOML
+$RUST sh -c 'cat > /tmp/app/Cargo.toml' <<'TOML'
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+TOML
+$RUST sh -c 'cat > /tmp/app/src/main.rs' <<'RS'
+#[derive(serde::Serialize)]
+struct Hello {
+    from: &'static str,
+}
+fn main() {
+    println!("{}", serde_json::to_string(&Hello { from: "the vault" }).unwrap());
+}
+RS
+OUT=$($RUST sh -c 'cd /tmp/app && cargo run 2>&1' | tr -d '')
+echo "$OUT" | grep -E 'Downloaded [0-9]+ crates|Finished' | sed 's/^/  | /'
+case "$OUT" in *'{"from":"the vault"}'*) ok "resolved, downloaded, compiled (with a derive macro) and ran from the vault" ;; *) echo "$OUT" | tail -15; fail "the program did not run" ;; esac
+LOCKED=$($RUST sh -c 'grep -c "^checksum = " /tmp/app/Cargo.lock' | tr -d '')
+ok "$LOCKED crates in Cargo.lock, each checked by cargo against the checksum in the index"
+if $RUST sh -c 'cd /tmp/app && cargo add rand' >/dev/null 2>&1; then fail "rand was usable although it is not mirrored"
+else ok "a crate that is not mirrored cannot be added"; fi
+case "$($V mer wishlist)" in *"crates  rand"*) ok "the request for rand is on the wishlist" ;; *) $V mer wishlist; fail "rand is not on the wishlist" ;; esac
 
 step "vault: state and integrity"
 $V mer status
