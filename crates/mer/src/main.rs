@@ -468,6 +468,9 @@ enum RepoCmd {
     Quota { repo: String, bytes: String },
     /// Require an access token to download from a repo (on) or not (off).
     Private { repo: String, state: String },
+    /// Report a repository as out of date when what is published is older
+    /// than this many days ("off" to stop reporting).
+    Stale { repo: String, days: String },
 }
 
 #[derive(Subcommand)]
@@ -840,6 +843,22 @@ fn main() -> Result<()> {
                         Ok(())
                     })?;
                     println!("repo {repo}: {}", if private { "an access token is now required" } else { "open to every client" });
+                }
+                RepoCmd::Stale { repo, days } => {
+                    let limit = match days.as_str() {
+                        "off" => None,
+                        d => Some(d.parse::<u32>().ok().filter(|d| (1..=3650).contains(d)).ok_or_else(|| anyhow!("expected a number of days (1 to 3650) or off, got {d:?}"))?),
+                    };
+                    let r = st.repo(&repo)?;
+                    st.meta().write(|t| {
+                        t.repo_set_stale_days(r.id, limit)?;
+                        t.audit(mer_storage::now_ms(), "cli", "repo.settings", &format!("{repo} stale_after_days={limit:?}"))?;
+                        Ok(())
+                    })?;
+                    match limit {
+                        Some(d) => println!("repo {repo}: reported as out of date when what is published is older than {d} days"),
+                        None => println!("repo {repo}: never reported as out of date"),
+                    }
                 }
                 RepoCmd::Quota { repo, bytes } => {
                     let r = st.repo(&repo)?;
