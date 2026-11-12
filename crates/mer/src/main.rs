@@ -98,6 +98,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CargoCmd,
     },
+    /// Go modules (collector side).
+    Go {
+        #[command(subcommand)]
+        cmd: GoCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -301,6 +306,35 @@ enum CargoCmd {
         features: Vec<String>,
         /// Additional host the collector may contact (repeatable), if the
         /// registry keeps crate files on another host.
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum GoCmd {
+    /// Mirror Go modules and what they require into a new snapshot of a go repo.
+    Sync {
+        repo: String,
+        /// The upstream module proxy.
+        #[arg(long, default_value = "https://proxy.golang.org")]
+        proxy: String,
+        /// What to mirror (repeatable): github.com/gin-gonic/gin (latest
+        /// release) or github.com/gin-gonic/gin@v1.10.0.
+        #[arg(long = "module", short = 'm')]
+        modules: Vec<String>,
+        /// The go.mod of a project inside the air gap (repeatable): what it
+        /// requires is mirrored at exactly the versions it names.
+        #[arg(long = "gomod")]
+        gomods: Vec<PathBuf>,
+        /// The checksum database every file is compared with.
+        #[arg(long, default_value = "https://sum.golang.org")]
+        sumdb: String,
+        /// Keep files as the proxy sends them, without the checksum database
+        /// (for a private proxy whose modules the database does not know).
+        #[arg(long)]
+        no_sumdb: bool,
+        /// Additional host the collector may contact (repeatable).
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
@@ -1200,6 +1234,45 @@ fn main() -> Result<()> {
                     human(rep.downloaded_bytes),
                     rep.reused
                 );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Go { cmd } => match cmd {
+            GoCmd::Sync { repo, proxy, modules, gomods, sumdb, no_sumdb, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                hosts.push(mer_fetch::host_of(&proxy).ok_or_else(|| anyhow!("{proxy:?} is not an http(s) URL"))?);
+                let sumdb_url = (!no_sumdb).then_some(sumdb);
+                if let Some(url) = &sumdb_url {
+                    hosts.push(mer_fetch::host_of(url).ok_or_else(|| anyhow!("{url:?} is not an http(s) URL"))?);
+                }
+                let mut texts = Vec::new();
+                for path in &gomods {
+                    texts.push(std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?);
+                }
+                let client = mer_fetch::HttpClient::new(&hosts);
+                let cfg = mer_format_go::GoConfig { proxy_url: proxy, modules, gomods: texts, sumdb_url };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.proxy_url, hosts.join(", "));
+                let rep = mer_format_go::sync(&st, &repo, &client, &cfg)?;
+                println!(
+                    "{} modules, {} source archives, {} go.mod files; downloaded {} files ({}), {} already mirrored",
+                    rep.modules,
+                    rep.archives,
+                    rep.gomods,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused
+                );
+                match &cfg.sumdb_url {
+                    Some(url) => println!("{} files compared with the checksum database at {url}", rep.verified),
+                    None => println!("  WARNING: the checksum database was not consulted"),
+                }
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");
                 }

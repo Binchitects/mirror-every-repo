@@ -408,3 +408,26 @@ fn cargo_registries_describe_themselves_and_record_missing_crates() {
     r.st.meta().write(|t| t.repo_set_private(id, true)).unwrap();
     assert_eq!(get(&r, "/crates/index/config.json").0, 401);
 }
+
+#[test]
+fn go_proxy_paths_are_served_and_missing_versions_become_wishes() {
+    let r = rig(
+        "go",
+        "go",
+        &[("ex.com/lib/@v/list", b"v1.0.0\n"), ("ex.com/lib/@v/v1.0.0.mod", b"module ex.com/lib\n"), ("ex.com/lib/@latest", b"{}"), ("ex.com/!upper/@v/v1.0.0.zip", b"zip")],
+    );
+    assert_eq!(get(&r, "/go/ex.com/lib/@v/list").1, "v1.0.0\n");
+    assert_eq!(get(&r, "/go/ex.com/lib/@v/v1.0.0.mod").1, "module ex.com/lib\n");
+    assert_eq!(get(&r, "/go/ex.com/lib/@latest").1, "{}");
+    assert_eq!(get(&r, "/go/ex.com/!upper/@v/v1.0.0.zip").1, "zip");
+    assert_eq!(get(&r, "/go/ex.com/lib/@v/v2.0.0.info").0, 404);
+    assert_eq!(get(&r, "/go/ex.com/!other/@latest").0, 404);
+    // The go command probes shorter module paths and services this vault does not offer.
+    assert_eq!(get(&r, "/go/ex.com/!other/@v/list").0, 404);
+    for path in ["/go/github.com/owner/@v/v1.0.0.info", "/go/github.com/@v/list", "/go/ex.com/@latest", "/go/sumdb/sum.golang.org/supported", "/go/ex.com/lib/@v/..%2f..%2fmeta.db", "/go/ex.com/lib/@v/v1.0.0.exe", "/go/ex.com/lib"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    let mut wished = wishes(&r);
+    wished.sort();
+    assert_eq!(wished, vec![("ex.com/Other".to_string(), 2), ("ex.com/lib@v2.0.0".to_string(), 1)]);
+}
