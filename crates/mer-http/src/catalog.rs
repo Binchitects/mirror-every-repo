@@ -55,6 +55,19 @@ pub(crate) fn package_of(format: &str, path: &str) -> Option<(String, String)> {
             let (name, file) = path.strip_prefix("crates/")?.split_once('/')?;
             own(name, file.strip_suffix(".crate")?.strip_prefix(name)?.strip_prefix('-')?)
         }
+        "maven" => {
+            // org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.pom: one POM per version.
+            let mut parts: Vec<&str> = path.strip_suffix(".pom")?.split('/').collect();
+            let (file, version, artifact) = (parts.pop()?, parts.pop()?, parts.pop()?);
+            (!parts.is_empty() && file == format!("{artifact}-{version}")).then(|| own(&format!("{}:{artifact}", parts.join(".")), version)).flatten()
+        }
+        "rpm" => {
+            // Packages/b/bash-5.1.8-9.el9.x86_64.rpm: name-version-release.arch
+            let stem = path.strip_prefix("Packages/")?.rsplit('/').next()?.strip_suffix(".rpm")?;
+            let (rest, release_arch) = stem.rsplit_once('-')?;
+            let (name, version) = rest.rsplit_once('-')?;
+            own(name, &format!("{version}-{release_arch}"))
+        }
         "go" => {
             // github.com/!azure/sdk/@v/v1.2.3.zip
             let (module, file) = path.split_once("/@v/")?;
@@ -97,6 +110,7 @@ pub(crate) fn wish_hint(format: &str, wish: &str) -> Option<String> {
         "helm" => package_of("helm", &format!("{wish}.tgz")).map(|(n, v)| format!("-c {n}@{v}")),
         "cargo" => Some(format!("-p {wish}")),
         "go" => Some(format!("-m {wish}")),
+        "maven" => Some(format!("-a {wish}")),
         "apt" => package_of("apt", wish).map(|(n, _)| format!("--package {n}")),
         _ => None,
     }
@@ -131,6 +145,12 @@ mod tests {
             ("cargo", "index/se/rd/serde", None),
             ("go", "github.com/!azure/sdk/@v/v1.2.3.zip", Some(("github.com/Azure/sdk", "v1.2.3"))),
             ("go", "github.com/gin-gonic/gin/@v/v1.10.0.mod", None),
+            ("maven", "org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.pom", Some(("org.apache.commons:commons-lang3", "3.14.0"))),
+            ("maven", "org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar", None),
+            ("maven", "org/apache/commons/commons-lang3/maven-metadata.xml", None),
+            ("rpm", "Packages/b/bash-5.1.8-9.el9.x86_64.rpm", Some(("bash", "5.1.8-9.el9.x86_64"))),
+            ("rpm", "Packages/g/glibc-minimal-langpack-2.34-125.el9.x86_64.rpm", Some(("glibc-minimal-langpack", "2.34-125.el9.x86_64"))),
+            ("rpm", "repodata/repomd.xml", None),
             ("raw", "tools/a.txt", None),
         ];
         for (format, path, want) in cases {
@@ -152,6 +172,7 @@ mod tests {
             ("go", "github.com/google/uuid", Some("-m github.com/google/uuid")),
             ("go", "github.com/google/uuid@v1.6.0", Some("-m github.com/google/uuid@v1.6.0")),
             ("apt", "pool/main/h/htop/htop_3.2.2-2_amd64.deb", Some("--package htop")),
+            ("maven", "com.google.guava:guava:33.0.0-jre", Some("-a com.google.guava:guava:33.0.0-jre")),
             ("raw", "tools/missing.tgz", None),
         ];
         for (format, wish, want) in cases {

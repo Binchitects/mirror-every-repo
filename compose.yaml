@@ -92,6 +92,20 @@ services:
       GOSUMDB: "off"
       GOTOOLCHAIN: local
 
+  mvnclient:
+    image: maven:3.9-eclipse-temurin-17
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [more]
+
+  rpmclient:
+    image: rockylinux:9
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [more]
+
 networks:
   internet: {}
   diode:

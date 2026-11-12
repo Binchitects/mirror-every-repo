@@ -41,6 +41,42 @@ pub fn verify_inrelease(keyring: &Path, inrelease: &[u8]) -> Result<Vec<u8>, Apt
     Ok(std::fs::read(&output)?)
 }
 
+/// A keyring as gpgv wants it: binary. Distributions hand out their keys
+/// ASCII-armoured, so armour is removed here.
+fn binary_keyring(text: &[u8]) -> Vec<u8> {
+    use base64::Engine;
+    let Ok(text) = std::str::from_utf8(text) else { return text.to_vec() };
+    if !text.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----") {
+        return text.as_bytes().to_vec();
+    }
+    let mut out = Vec::new();
+    for block in text.split("-----BEGIN PGP PUBLIC KEY BLOCK-----").skip(1) {
+        let body = block.split("-----END PGP PUBLIC KEY BLOCK-----").next().unwrap_or("").replace('\r', "");
+        // Headers end at the first empty line; the checksum line starts with "=".
+        let data: String = body.split_once("\n\n").map_or(body.as_str(), |(_, d)| d).lines().map(str::trim).filter(|l| !l.starts_with('=')).collect();
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) {
+            out.extend(bytes);
+        }
+    }
+    out
+}
+
+/// Verify a detached signature (for example `repomd.xml.asc`) over `data`
+/// against a keyring file, which may be binary or ASCII-armoured.
+pub fn verify_detached(keyring: &Path, data: &[u8], signature: &[u8]) -> Result<(), AptError> {
+    let keys = std::fs::read(keyring).map_err(|e| AptError::Signature(format!("keyring {}: {e}", keyring.display())))?;
+    let tmp = tempfile::tempdir()?;
+    let (ring, sig, file) = (tmp.path().join("keys.gpg"), tmp.path().join("data.asc"), tmp.path().join("data"));
+    std::fs::write(&ring, binary_keyring(&keys))?;
+    std::fs::write(&sig, signature)?;
+    std::fs::write(&file, data)?;
+    let out = run(Command::new("gpgv").arg("--homedir").arg(tmp.path()).arg("--keyring").arg(&ring).arg(&sig).arg(&file))?;
+    if !out.status.success() {
+        return Err(AptError::Signature(last_lines(&out.stderr)));
+    }
+    Ok(())
+}
+
 /// The key this site signs its own repository metadata with. It lives in a
 /// GnuPG home directory on the collector.
 pub struct SiteKey {
@@ -164,7 +200,16 @@ mod tests {
         let signed = key.clearsign(text).unwrap();
         assert!(signed.starts_with(b"-----BEGIN PGP SIGNED MESSAGE-----"));
         assert_eq!(verify_inrelease(&ring, &signed).unwrap(), text);
-        assert!(key.detach_sign(text).unwrap().starts_with(b"-----BEGIN PGP SIGNATURE-----"));
+        let detached = key.detach_sign(text).unwrap();
+        assert!(detached.starts_with(b"-----BEGIN PGP SIGNATURE-----"));
+        // A detached signature verifies against a binary keyring and an armoured one alike.
+        let armoured = dir.path().join("key.asc");
+        std::fs::write(&armoured, key.public_armored().unwrap()).unwrap();
+        for keyring in [&ring, &armoured] {
+            verify_detached(keyring, text, &detached).unwrap();
+            assert!(matches!(verify_detached(keyring, b"other text", &detached), Err(AptError::Signature(_))));
+        }
+        assert!(matches!(verify_detached(&dir.path().join("nope"), text, &detached), Err(AptError::Signature(_))));
         assert!(key.public_armored().unwrap().starts_with(b"-----BEGIN PGP PUBLIC KEY BLOCK-----"));
     }
 

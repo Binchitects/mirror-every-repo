@@ -28,6 +28,8 @@ mer-format-nuget = { path = "crates/mer-format-nuget" }
 mer-format-helm = { path = "crates/mer-format-helm" }
 mer-format-cargo = { path = "crates/mer-format-cargo" }
 mer-format-go = { path = "crates/mer-format-go" }
+mer-format-maven = { path = "crates/mer-format-maven" }
+mer-format-rpm = { path = "crates/mer-format-rpm" }
 mer-http = { path = "crates/mer-http" }
 mer-auth = { path = "crates/mer-auth" }
 
@@ -38,6 +40,8 @@ sha1 = "0.10"
 libc = "0.2"
 serde_yaml = "0.9"
 semver = "1"
+roxmltree = "0.20"
+ruzstd = "0.7"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 ureq = "2"

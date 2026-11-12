@@ -752,10 +752,12 @@ dependencies = [
  "mer-format-cargo",
  "mer-format-go",
  "mer-format-helm",
+ "mer-format-maven",
  "mer-format-npm",
  "mer-format-nuget",
  "mer-format-oci",
  "mer-format-pypi",
+ "mer-format-rpm",
  "mer-http",
  "mer-meta",
  "mer-storage",
@@ -860,6 +862,7 @@ dependencies = [
 name = "mer-format-apt"
 version = "1.0.0"
 dependencies = [
+ "base64 0.22.1",
  "flate2",
  "mer-blob",
  "mer-core",
@@ -917,6 +920,24 @@ dependencies = [
  "mer-meta",
  "mer-storage",
  "serde_yaml",
+ "tempfile",
+ "thiserror",
+ "tiny_http",
+]
+
+[[package]]
+name = "mer-format-maven"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "mer-blob",
+ "mer-core",
+ "mer-fetch",
+ "mer-meta",
+ "mer-storage",
+ "roxmltree",
+ "serde_json",
+ "sha1",
  "tempfile",
  "thiserror",
  "tiny_http",
@@ -983,6 +1004,27 @@ dependencies = [
  "mer-meta",
  "mer-storage",
  "serde_json",
+ "tempfile",
+ "thiserror",
+ "tiny_http",
+]
+
+[[package]]
+name = "mer-format-rpm"
+version = "1.0.0"
+dependencies = [
+ "flate2",
+ "hex",
+ "mer-blob",
+ "mer-core",
+ "mer-fetch",
+ "mer-format-apt",
+ "mer-meta",
+ "mer-storage",
+ "roxmltree",
+ "ruzstd",
+ "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tiny_http",
@@ -1218,6 +1260,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
+
+[[package]]
 name = "rusqlite"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1314,6 +1362,15 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "ruzstd"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
+dependencies = [
+ "twox-hash",
+]
 
 [[package]]
 name = "ryu"
@@ -1465,6 +1522,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1565,6 +1628,16 @@ checksum = "abc840c238154d58f9e86b2792261edfde565a17696e1cda1a449de27979801a"
 dependencies = [
  "displaydoc",
  "zerovec",
+]
+
+[[package]]
+name = "twox-hash"
+version = "1.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
+dependencies = [
+ "cfg-if",
+ "static_assertions",
 ]
 
 [[package]]

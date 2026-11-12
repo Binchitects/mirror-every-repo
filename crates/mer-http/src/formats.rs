@@ -425,6 +425,21 @@ fn go(raw: &str) -> Route {
     }
 }
 
+// ----------------------------------------------------------------- maven
+
+/// A Maven repository is served as its files. Maven asks for the POM of an
+/// artifact first, so a POM that is missing is the wish: `group:artifact:version`.
+fn maven(raw: &str) -> Route {
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::text(404, "not found\n")) };
+    let wish = path.strip_suffix(".pom").and_then(|stem| {
+        // org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0
+        let mut parts: Vec<&str> = stem.split('/').collect();
+        let (file, version, artifact) = (parts.pop()?, parts.pop()?, parts.pop()?);
+        (!parts.is_empty() && file == format!("{artifact}-{version}")).then(|| format!("{}:{artifact}:{version}", parts.join(".")))
+    });
+    Route::Mapped { path, wish }
+}
+
 // ------------------------------------------------------------------ helm
 
 /// A chart repository is two kinds of file: the index and chart archives.
@@ -445,6 +460,13 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "helm" => helm(path),
         "cargo" => cargo(req, tls, repo, path),
         "go" => go(path),
+        "maven" => maven(path),
+        // dnf learns what exists from the metadata, so it never asks for a
+        // package that is not mirrored: nothing here is a wish.
+        "rpm" => match percent_decode(path) {
+            Some(path) => Route::Mapped { path, wish: None },
+            None => Route::Done(Reply::text(404, "not found\n")),
+        },
         _ => Route::Unhandled,
     }
 }
