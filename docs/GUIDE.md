@@ -32,7 +32,7 @@ Both sides run the same binary, `mer`, and keep everything in one data directory
 The container image is the supported way to run it.
 
 ```bash
-docker pull ghcr.io/binchitects/mirror-every-repo:1.0.0
+docker pull ghcr.io/binchitects/mirror-every-repo:1.1.0
 ```
 
 The image's entry point is `mer`. It runs as user id 10001 and expects two volumes: `/data` for the store and database, `/keys` for key files.
@@ -43,7 +43,7 @@ A long-running container per side, with a shell alias, keeps the rest of this gu
 docker run -d --name mer --restart unless-stopped \
   -v mer-data:/data -v mer-keys:/keys -v /mnt/usb:/media \
   -p 8080:8080 -p 9000:9000/udp \
-  --entrypoint sleep ghcr.io/binchitects/mirror-every-repo:1.0.0 infinity
+  --entrypoint sleep ghcr.io/binchitects/mirror-every-repo:1.1.0 infinity
 ```
 
 ```bash
@@ -150,6 +150,77 @@ mer oci sync hub -i library/alpine:3.20 -i library/nginx:1.27 --platform linux/a
 - `--registry` selects another registry (default Docker Hub). Only images that can be pulled anonymously are supported.
 - `--platform` is repeatable. Other platforms of a multi-platform image are not downloaded.
 
+### RPM (dnf, yum)
+
+```text
+mer repo add rocky --format rpm
+mer rpm sync rocky \
+    --url https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os \
+    --url https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os \
+    --keyring /keys/RPM-GPG-KEY-Rocky-9 --sign-home /keys/gnupg \
+    -p nginx -p git
+```
+
+- `--url` is the directory that holds `repodata/`. Give every repository the packages may depend on (a distribution usually splits into two or three); together they become one repository on the vault.
+- `-p` is a package name, or anything a package provides: `/usr/bin/git`, `libfoo.so.1()(64bit)`. What the package needs is added. `--recommends` also follows weak dependencies, which `dnf` installs by default.
+- `--arch` (default `x86_64`) is repeatable; `noarch` packages are always included.
+- `--keyring` is the distribution's public key file (on a machine of that distribution: `/etc/pki/rpm-gpg/`). With it, the signature on the upstream metadata is required and verified. Without it the sync still works but says that signatures were not checked.
+- `--sign-home` signs the metadata of the mirrored repository with the site key (`mer apt keygen` creates it), for clients that set `repo_gpgcheck=1`.
+- Packages are stored unchanged, so clients keep `gpgcheck=1` with the distribution's own key.
+- Module streams are not mirrored; packages that belong to one are left out, and the sync says how many.
+
+### Maven
+
+```text
+mer repo add maven --format maven
+mer maven sync maven \
+    -a org.apache.commons:commons-lang3:3.14.0 -a com.google.guava:guava \
+    -a org.apache.maven.plugins:maven-compiler-plugin:3.13.0 \
+    --bom org.springframework.boot:spring-boot-dependencies:3.3.0
+```
+
+- `-a` is `group:artifact:version`. Without a version it is the one a `--bom` manages, else the latest release.
+- `--bom` names a BOM your projects import. The versions it manages are then used throughout, as they are in those projects.
+- **Build plugins are artifacts too.** A `mvn package` needs the resources, compiler, surefire and jar plugins at the versions your Maven or your POMs name; mirror them with `-a`. Pin plugin versions in your projects so that the list is known. Test runners fetch more at run time (the surefire provider for your test framework); name those as well, or build with `-DskipTests` until they are mirrored.
+- `--classifier sources` (repeatable) also mirrors those files where they exist.
+- `--url` selects another repository (default Maven Central).
+- Every version of an artifact that is reached is mirrored, so the one Maven settles on is there.
+
+### Cargo (Rust)
+
+```text
+mer repo add crates --format cargo
+mer cargo sync crates -p serde -p "tokio@1.38" --lockfile /work/myproject/Cargo.lock
+```
+
+- `-p` is written as in `Cargo.toml`: `tokio@1.38` means 1.38 or a compatible later version, `rand@=0.8.5` exactly that one.
+- Named crates are mirrored with every feature switched on, so that any build can be served. With `--default-features-only` only their default features are followed; add single ones with `--feature tokio/full`.
+- `--lockfile` (repeatable) mirrors exactly the versions a `Cargo.lock` names, so that `cargo build --locked` works inside the air gap.
+- `--index` selects another registry (default crates.io).
+
+### Go modules
+
+```text
+mer repo add go --format go
+mer go sync go -m github.com/gin-gonic/gin@v1.10.0 -m golang.org/x/sync --gomod /work/myservice/go.mod
+```
+
+- `-m` is a module path, with `@version` or without (the latest release).
+- `--gomod` (repeatable) is the `go.mod` of a project: what it requires is mirrored at exactly the versions it names.
+- Every file is compared with the Go checksum database (`--sumdb`, default `sum.golang.org`). For a private proxy whose modules that database does not know, use `--no-sumdb`.
+- Clients set `GOSUMDB=off`: the check they cannot make from inside the air gap was made on the collector.
+
+### Helm charts
+
+```text
+mer repo add charts --format helm
+mer helm sync charts --url https://charts.jetstack.io -c cert-manager -c "cert-manager@~1.16"
+```
+
+- `-c` is a chart name, with `@version` or `@range` or without (the newest stable version).
+- One chart repository per repo. If the repository keeps its archives on another host (GitHub releases, for example), allow it: `--allow-host github.com`.
+- Charts kept in an OCI registry are container content: `mer repo add oci-charts --format oci`, then `mer oci sync oci-charts --registry https://ghcr.io -i <path>:<version>`, and clients use `helm pull oci://vault:8080/oci-charts/<path> --version <version>`.
+
 ### Plain files
 
 ```text
@@ -161,7 +232,7 @@ The repo becomes a copy of the directory tree.
 
 ### Contacting other hosts
 
-The collector only connects to the upstream host you name, plus the hosts that upstream is known to use (`files.pythonhosted.org` for PyPI, `auth.docker.io` for Docker Hub). If a private upstream keeps files or tokens on another host, allow it with `--allow-host`.
+The collector only connects to the upstream host you name, plus the hosts that upstream is known to use (`files.pythonhosted.org` for PyPI, `auth.docker.io` for Docker Hub, `static.crates.io` for crates.io, `sum.golang.org` for Go). If a private upstream keeps files or tokens on another host, allow it with `--allow-host`.
 
 ## Carry bundles across
 
@@ -210,7 +281,7 @@ Bundles do not have to arrive in order. If bundle 7 never arrives and bundle 8 d
 
 ## Review, approve, publish
 
-Imported snapshots are sealed but not visible to clients. In the web panel, the Overview lists what is waiting; "Review changes" shows what publishing would add, change and remove; then approve and publish. From the command line:
+Imported snapshots are sealed but not visible to clients. In the web panel, the Overview lists what is waiting; "Review changes" shows what publishing would add, change and remove, first as packages (added, updated from one version to another, removed) and then file by file; then approve and publish. From the command line:
 
 ```text
 mer status                    # repos, snapshots, bundles
@@ -230,7 +301,7 @@ Run the server on the vault:
 ```bash
 docker run -d --name mer --restart unless-stopped \
   -v mer-data:/data -v mer-keys:/keys -p 8080:8080 -p 8443:8443 \
-  ghcr.io/binchitects/mirror-every-repo:1.0.0 \
+  ghcr.io/binchitects/mirror-every-repo:1.1.0 \
   serve --listen 0.0.0.0:8080 --admin-listen 0.0.0.0:8443 \
         --tls-cert /keys/tls.crt --tls-key /keys/tls.key
 ```
@@ -248,9 +319,14 @@ Client configuration, with `vault:8080` as the package listener:
 | npm | `npm config set registry https://vault:8080/npm/`. Use `npm install --no-audit`: the vault has no audit service. |
 | dotnet | `dotnet nuget add source https://vault:8080/nuget/v3/index.json --name vault`, and remove the default source. Restore works; searching for packages does not. |
 | docker | `docker pull vault:8080/hub/library/alpine:3.20`. The image name is `<vault>/<repo>/<upstream name>`. |
+| dnf | A file in `/etc/yum.repos.d/` with `baseurl=https://vault:8080/rocky/`, `gpgcheck=1` and the distribution's `gpgkey`. Install with the distribution's own repositories switched off: `dnf --disablerepo='*' --enablerepo=vault install <package>`. |
+| mvn | `~/.m2/settings.xml` with a mirror of `*` at `https://vault:8080/maven`. |
+| cargo | `.cargo/config.toml`: `[source.crates-io] replace-with = "vault"` and `[registries.vault] index = "sparse+https://vault:8080/crates/index/"`. |
+| go | `go env -w GOPROXY=https://vault:8080/go GOSUMDB=off` |
+| helm | `helm repo add vault https://vault:8080/charts` |
 | files | `curl -O https://vault:8080/tools/<path>` |
 
-On plain HTTP, clients need to be told to accept it: `--trusted-host vault` for pip, `--allow-insecure-connections` for the dotnet source, `insecure-registries` in Docker's `daemon.json`. apt and npm accept `http://` URLs as they are.
+On plain HTTP, clients need to be told to accept it: `--trusted-host vault` for pip, `--allow-insecure-connections` for the dotnet source, `insecure-registries` in Docker's `daemon.json`, `--plain-http` for `helm pull oci://`. apt, dnf, npm, mvn (with a mirror you configure yourself), cargo, go and helm accept `http://` URLs as they are.
 
 The panel's "Client setup" button shows these lines for each repo with your address filled in.
 
@@ -276,6 +352,28 @@ mer user disable olga
 
 Add `--password-stdin` to supply a password instead of having one generated. Five wrong passwords lock a user name for a minute. Every sign-in and every change is in the audit log with the user's name.
 
+### Sign-in through LDAP
+
+People can sign in to the panel with their directory account (OpenLDAP, Active Directory, FreeIPA). Give the server the directory and say which groups get which role:
+
+```text
+mer serve ... \
+    --ldap-url ldap://directory.example.org:389 --ldap-starttls \
+    --ldap-bind-dn "cn=mirror,ou=services,dc=example,dc=org" --ldap-bind-password-file /keys/ldap-password \
+    --ldap-user-base "ou=people,dc=example,dc=org" \
+    --ldap-group-base "ou=groups,dc=example,dc=org" \
+    --ldap-admin-group mirror-admins --ldap-operator-group mirror-operators --ldap-viewer-group staff
+```
+
+- The user is looked up with `--ldap-user-filter` (default `(uid={user})`; for Active Directory `(sAMAccountName={user})`), then the password is checked by signing in to the directory as that user. The password is not stored and not logged.
+- A group is named by its `cn` or by its full DN; each option can be given several times. The highest role wins. Someone whose password is right but who is in none of the groups is refused.
+- Groups come from the user's `memberOf` attribute and, with `--ldap-group-base`, from a search with `--ldap-group-filter` (default: `member`, `uniqueMember` or `memberUid`).
+- The role is read from the directory at every sign-in. A session that is already open lasts up to 12 hours; to shut someone out at once, disable the user in the panel (Access page).
+- Local users are checked first and keep working when the directory cannot be reached. Keep one local administrator for that case.
+- Use `ldaps://` or `--ldap-starttls`; with plain `ldap://` the server says at start-up that passwords cross the network in clear. For a directory certificate from your own CA, start the server with the environment variable `SSL_CERT_FILE` pointing at that CA.
+- Every option can also be set through the environment: `MER_LDAP_URL`, `MER_LDAP_BIND_DN`, and so on (`mer serve --help` lists them).
+- User names are lower-case letters, digits, `.`, `_` and `-`.
+
 ### Private repositories
 
 By default a published repo can be read by any machine that reaches the vault. To require a token:
@@ -296,8 +394,13 @@ A token without `--repo` is valid for every repo. Clients send the token as a pa
 | npm | `.npmrc`: `//vault:8080/npm/:_authToken=<token>` |
 | dotnet | `dotnet nuget add source ... --username any --password <token> --store-password-in-clear-text` |
 | docker | `docker login vault:8080` with any user name and the token as password |
+| dnf | `username=token` and `password=<token>` in the `.repo` file |
+| mvn | `<server>` in `settings.xml` with the id of the mirror, any user name, and the token as password |
+| cargo | `credential-provider = ["cargo:token"]` under `[registries.vault]`, and `token = "Bearer <token>"` under `[registries.vault]` in `~/.cargo/credentials.toml` |
+| go | `~/.netrc`: `machine vault login go password <token>` |
+| helm | `helm repo add vault https://vault:8080/charts --username any --password <token>` |
 
-The apt flow is tested end to end with a real client. The others rely on the same Basic and Bearer handling, which is covered by the server's tests.
+The apt and cargo flows are tested end to end with real clients. The others rely on the same Basic and Bearer handling, which is covered by the server's tests.
 
 ## Day-to-day operation
 
@@ -308,7 +411,13 @@ mer audit                        # recent audit entries, and a check of the whol
 mer fsck --deep                  # re-hash every stored file against its digest
 ```
 
-**Wishlist.** Requests for packages, projects or images that are not mirrored are counted. Use the list to decide what to add to the next sync. (apt clients do not ask the server for packages missing from the index, so apt wishes do not appear.)
+**Wishlist.** Requests for packages, projects or images that are not mirrored are counted. The Wishlist page of the panel shows, for each item, what to add to the sync command on the collector (`-r flask`, `-a org.slf4j:slf4j-api:2.0.13`), and offers the list as a text file to carry out. Operators can dismiss items that are not going to be mirrored, or clear the list. (apt and dnf clients do not ask the server for packages missing from the index, so their wishes do not appear.)
+
+**How things are going.** The Overview and Traffic pages chart downloads, data sent, requests for missing items and storage used over the last 24 hours, 7 days, 30 days or year. Each repository shows how old its published content is. To be warned when a repository has not been updated for too long:
+
+```text
+mer repo stale debian 14         # report it as out of date when the content is older than 14 days ("off" to stop)
+```
 
 **Space.** Content stays as long as a retained snapshot refers to it.
 
@@ -339,5 +448,12 @@ Garbage collection only removes content that has been unreferenced for the grace
 | docker: `server gave HTTP response to HTTPS client` | Docker expects TLS | Serve with TLS, or list the vault under `insecure-registries` |
 | dotnet: `NU1302` | NuGet refuses plain HTTP sources | Serve with TLS, or add `allowInsecureConnections="true"` to the source |
 | pip: `is not a trusted or secure host` | pip refuses plain HTTP indexes | Serve with TLS, or pass `--trusted-host` |
+| mvn: `was not found in ... during a previous attempt` | Maven remembers that an artifact was missing | After the missing artifact has been mirrored and published, run `mvn -U ...` once |
+| mvn: a plugin `or one of its dependencies could not be resolved` | A build plugin, or something it needs, is not mirrored | Add the plugin with `-a group:artifact:version`; the Wishlist page names what was asked for |
+| cargo: `no matching package named ...` | The crate, or the version a `Cargo.lock` pins, is not mirrored | Add it with `-p`, or give the lock file with `--lockfile` |
+| go: `verifying module: ... sum.golang.org` | The client is trying to reach the checksum database | `go env -w GOSUMDB=off` on the client |
+| dnf: `No match for argument` | The package is not in the mirrored repository | Add it with `-p` on the collector |
+| dnf: `GPG check FAILED` | The client does not have the distribution's key, or the package is from elsewhere | Point `gpgkey` at the distribution's key file |
+| Sign-in answers "the directory cannot be asked right now" | The LDAP server cannot be reached, or its certificate is not trusted | The reason is in the audit log (`mer audit`). Local users can still sign in |
 | Sync warns `depends on X, which upstream does not provide` | A dependency could not be satisfied in that upstream | Usually harmless for optional items; otherwise add the upstream or component that has it |
 | The panel says no user exists yet | A fresh vault has no accounts | `mer user add admin --role admin` on the vault host |

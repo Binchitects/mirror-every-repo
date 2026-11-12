@@ -6,14 +6,14 @@
 
 **Package repositories for networks that have no internet.**
 
-`mirror-every-repo` keeps apt, PyPI, npm, NuGet and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `pip`, `npm`, `dotnet` and `docker` clients.
+`mirror-every-repo` keeps apt, RPM, PyPI, npm, NuGet, Maven, Cargo, Go module, Helm and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `dnf`, `pip`, `npm`, `dotnet`, `mvn`, `cargo`, `go`, `helm` and `docker` clients.
 
 It is one binary, `mer`, written in Rust, shipped as a container image.
 
 ```mermaid
 flowchart LR
   subgraph out [Internet side]
-    U[Debian, PyPI, npm,<br/>NuGet, Docker Hub] --> C[collector]
+    U[Debian, Rocky, PyPI, npm, NuGet,<br/>Maven Central, crates.io,<br/>Go proxy, Helm, Docker Hub] --> C[collector]
   end
   C -- "signed delta bundle" --> M[(USB, disk, DVD)]
   C -- "one-way UDP<br/>with error correction" --> D{{data diode}}
@@ -21,7 +21,7 @@ flowchart LR
     M --> V[vault]
     D --> V
     V --> G[quarantine, review,<br/>approve, publish]
-    G --> K[apt-get, pip, npm,<br/>dotnet, docker]
+    G --> K[apt-get, dnf, pip, npm,<br/>dotnet, mvn, cargo, go,<br/>helm, docker]
   end
   K -. "what was asked for<br/>and missing" .-> W[wishlist]
 ```
@@ -39,15 +39,15 @@ General repository managers assume both sides can talk to each other. An air gap
 
 | | |
 |---|---|
-| **Formats** | apt (Debian, Ubuntu), PyPI, npm, NuGet (.NET), container images (OCI and Docker), plain files |
+| **Formats** | apt (Debian, Ubuntu), RPM (dnf, yum), PyPI, npm, NuGet (.NET), Maven, Cargo (Rust), Go modules, Helm charts, container images (OCI and Docker), plain files |
 | **Transfer** | Removable media volumes sized to the medium; one-way UDP with RaptorQ error correction for data diodes |
 | **Integrity** | Ed25519-signed bundles with k-of-n signers, a Merkle proof per segment, SHA-256 content addressing, upstream hashes and signatures checked before anything enters a snapshot |
 | **Control** | Quarantine with review of what would change, approve or reject, atomic publish, instant rollback, hash-chained audit log |
-| **Access** | Web panel users with roles, client tokens for private repositories, TLS |
+| **Access** | Web panel users with roles, local or from an LDAP directory; client tokens for private repositories; TLS |
 | **Space** | One content-addressed store shared by all formats (a base layer or package is kept once), per-repository quotas, retention, garbage collection |
-| **Visibility** | Web panel, download statistics per repository, file and client, Prometheus metrics, wishlist |
+| **Visibility** | Web panel with charts of downloads, data sent and storage over time; how old each repository's content is; browsing and searching what is mirrored; a wishlist of what clients asked for and did not get; Prometheus metrics |
 
-Stock clients are tested end to end on machines that can reach only the vault: `apt-get install`, `pip install`, `npm install`, `dotnet restore` with build and run, and `docker pull` with run.
+Stock clients are tested end to end on machines that can reach only the vault: `apt-get install`, `dnf install`, `pip install`, `npm install`, `dotnet restore` with build and run, `mvn package`, `cargo build`, `go build`, `helm pull` and `docker pull` with run.
 
 ## Quick start
 
@@ -59,12 +59,12 @@ cd mirror-every-repo
 bash deploy/demo-apt.sh
 ```
 
-The script starts a collector, a vault on a network with no route out, and a stock Debian client that can reach only the vault. It mirrors `hello` from Debian, carries it across as removable media, installs it with `apt-get`, sends a second bundle through the one-way link, and checks every step. `deploy/demo-formats.sh` does the same for pip, npm, dotnet and docker.
+The script starts a collector, a vault on a network with no route out, and a stock Debian client that can reach only the vault. It mirrors `hello` from Debian, carries it across as removable media, installs it with `apt-get`, sends a second bundle through the one-way link, and checks every step. `deploy/demo-formats.sh` does the same for pip, npm, dotnet and docker; `deploy/demo-more.sh` for helm, cargo, go, mvn and dnf (name the ones you want: `bash deploy/demo-more.sh maven rpm`); `deploy/demo-ldap.sh` shows sign-in through an LDAP directory.
 
 ## Install
 
 ```bash
-docker pull ghcr.io/binchitects/mirror-every-repo:1.0.0
+docker pull ghcr.io/binchitects/mirror-every-repo:1.1.0
 ```
 
 The image contains the `mer` binary and runs as an unprivileged user with its data in `/data`. A Linux x86-64 binary is attached to each [release](https://github.com/Binchitects/mirror-every-repo/releases).
@@ -147,18 +147,23 @@ What the collector trusts upstream depends on the format:
 | npm | TLS to the registry | Every tarball against the registry integrity hash |
 | NuGet | TLS to the feed | Every package against the SHA-512 in the feed catalog |
 | Containers | TLS for tag to digest | Every manifest, config and layer against its digest |
+| Helm | TLS to the chart repository | Every chart against the SHA-256 in the index |
+| Cargo | TLS to the index | Every crate against the SHA-256 in the index |
+| Go | TLS to the proxy and the checksum database | Every `go.mod` and source archive against the checksum database |
+| Maven | TLS to the repository | Every file against the SHA-1 published next to it |
+| RPM | The distribution's signing key | Signature on the repository metadata; every package against it. Packages keep their own signatures for the clients to check |
 
-Only apt has an upstream signature that is checked. PyPI attestations, npm registry signatures, NuGet package signatures and container image signatures are not verified yet.
+Upstream signatures are checked for apt and RPM. PyPI attestations, npm registry signatures, NuGet package signatures, Maven signatures and container image signatures are not verified yet.
 
 ## Scope and limits
 
-This is a 1.0 of a focused tool, not a replacement for every feature of a general repository manager. The main limits:
+This is a focused tool, not a replacement for every feature of a general repository manager. The main limits:
 
 - Clients can read, not publish. There is no upload path from inside the air gap.
-- Sign-in is local users with three roles. There is no LDAP, Active Directory or OIDC yet.
+- Sign-in is local users or an LDAP directory, with three roles for the whole vault. There is no OIDC and there are no per-repository permissions yet.
 - Dependency selection follows each ecosystem's rules but is not a full solver. What cannot be satisfied is reported and left out.
 - Mirroring, sealing and importing are command-line operations. The web panel reviews, decides and reports.
-- The wishlist is shown on the vault. Carrying it back to the collector is a manual step.
+- The wishlist is shown on the vault, with what to add on the collector for each item, and can be downloaded as text. Carrying it back to the collector is a manual step.
 - The server is tuned for tens of clients, not thousands.
 
 The complete list, including what is deliberately simpler than the long-term design, is in [docs/STATUS.md](docs/STATUS.md).
@@ -190,7 +195,7 @@ bash scripts/dcargo.sh clippy --workspace --all-targets -- -D warnings
 bash deploy/demo.sh
 ```
 
-The code is a Cargo workspace of small crates (`crates/`), built with Rust 1.99. Version logic for each ecosystem is tested against truth tables generated from that ecosystem's reference implementation (`dpkg`, Python's `packaging`, npm's `semver`, `NuGet.Versioning`); the generators are next to the tables in `crates/*/tests/`.
+The code is a Cargo workspace of small crates (`crates/`), built with Rust 1.99. Version logic for each ecosystem is tested against truth tables generated from that ecosystem's reference implementation (`dpkg`, `rpm`, Python's `packaging`, npm's `semver`, `NuGet.Versioning`, Maven's `ComparableVersion`); the generators are next to the tables in `crates/*/tests/`.
 
 Every push to `main` runs lint, the test suite and an end-to-end demo. Pushing a tag `vX.Y.Z` builds and publishes the container image, the binary and the GitHub Release.
 
