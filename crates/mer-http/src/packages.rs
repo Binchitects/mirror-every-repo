@@ -68,7 +68,7 @@ fn presented_token(req: &Request) -> Option<String> {
     None
 }
 
-pub(crate) fn serve(app: &App, req: &Request, raw: &str) -> Reply {
+pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool) -> Reply {
     let st = &app.st;
     let Some((repo, path)) = raw.split_once('/') else { return Reply::text(404, "not found\n") };
 
@@ -93,8 +93,9 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str) -> Reply {
     }
     // Formats whose clients ask for something other than a stored file path.
     let mut wish_as: Option<String> = None;
-    match formats::route(&repo_row, path) {
+    match formats::route(app, req, tls, &repo_row, path) {
         formats::Route::Unhandled => {}
+        formats::Route::Done(reply) => return reply,
         formats::Route::Redirect(location) => return Reply::empty(301, vec![("Location", location)]),
         formats::Route::Mapped { path, wish } => {
             candidates = vec![path];

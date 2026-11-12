@@ -48,6 +48,13 @@ services:
     networks: [diode]
     profiles: [formats]
 
+  nodeclient:
+    image: node:20-slim
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+
 networks:
   internet: {}
   diode:
