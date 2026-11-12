@@ -324,6 +324,7 @@ impl Tx<'_> {
              ON CONFLICT(repo, path) DO UPDATE SET count = count + 1, last_at = excluded.last_at",
             params![repo, path, now],
         )?;
+        self.history_add("misses", repo, crate::hour_of(now), 1)?;
         Ok(())
     }
 

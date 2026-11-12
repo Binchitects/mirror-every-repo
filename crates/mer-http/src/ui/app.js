@@ -5,7 +5,7 @@
 // from users, so they must never be interpreted as markup.
 "use strict";
 
-const state = { me: null, tab: "overview", timer: null, flash: null };
+const state = { me: null, tab: "overview", timer: null, flash: null, range: "7d" };
 const root = document.getElementById("app");
 
 // ---------------------------------------------------------------- helpers
@@ -39,6 +39,19 @@ function when(ms) {
   const d = new Date(ms);
   const pad = (x) => String(x).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// "3 days ago", for how old the content of a repository is.
+function ago(ms) {
+  if (!ms) return "never";
+  const hours = Math.floor((Date.now() - ms) / 3600000);
+  if (hours < 1) return "less than an hour ago";
+  if (hours < 48) return `${count(hours, "hour", "hours")} ago`;
+  return `${Math.floor(hours / 24)} days ago`;
+}
+
+function num(n) {
+  return Number(n).toLocaleString("en-US");
 }
 
 function count(n, one, many) {
@@ -143,10 +156,154 @@ function loginView(needsSetup) {
       error, form));
 }
 
+// ----------------------------------------------------------------- charts
+//
+// One series per chart, drawn as a line over a light wash, always from zero.
+// The drawing is an SVG stretched to the card; every label is ordinary text
+// around it, so nothing is distorted and nothing is read from colour alone.
+// Hovering (or focusing the chart and using the arrow keys) reads out one
+// step; "Show as table" lists them all.
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svg(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+  return el;
+}
+
+const RANGES = [["24h", "24 hours"], ["7d", "7 days"], ["30d", "30 days"], ["1y", "1 year"]];
+
+function rangePicker() {
+  return h("div", { class: "ranges", role: "group", "aria-label": "Time range" },
+    RANGES.map(([id, label]) => h("button", {
+      class: `btn ${state.range === id ? "on" : ""}`, "aria-pressed": state.range === id ? "true" : "false",
+      onclick: () => { state.range = id; render(); },
+    }, label)),
+    h("span", { class: "muted" }, "Times are in UTC."));
+}
+
+// A round number at or above v, for the top of the axis.
+function axisTop(v, binary) {
+  if (!(v > 0)) return binary ? 1024 : 4;
+  let unit = 1;
+  if (binary) while (v / unit >= 1024) unit *= 1024;
+  const x = v / unit;
+  const p = 10 ** Math.floor(Math.log10(x));
+  const m = x / p;
+  const top = (m <= 1 ? 1 : m <= 2 ? 2 : m <= 4 ? 4 : m <= 5 ? 5 : 10) * p * unit;
+  return binary ? top : Math.max(4, top);
+}
+
+function compact(n) {
+  return n >= 10000 ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(n) : num(n);
+}
+
+function stepLabel(hist, i) {
+  const pad = (x) => String(x).padStart(2, "0");
+  const d = new Date(hist.start_ms + i * hist.step_hours * 3600000);
+  const day = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  if (hist.step_hours >= 168) return `week from ${day}`;
+  if (hist.step_hours >= 24) return day;
+  const from = `${day} ${pad(d.getUTCHours())}:00`;
+  if (hist.step_hours === 1) return from;
+  return `${from} to ${pad((d.getUTCHours() + hist.step_hours) % 24)}:00`;
+}
+
+// Points of a line in a 100 x 100 box; a gap in the data breaks the line.
+function linePaths(values, top) {
+  const n = values.length;
+  const runs = [];
+  let run = [];
+  values.forEach((v, i) => {
+    if (v === null || v === undefined) { if (run.length) runs.push(run); run = []; return; }
+    run.push([n > 1 ? (i / (n - 1)) * 100 : 50, 100 - (Math.min(v, top) / top) * 100]);
+  });
+  if (run.length) runs.push(run);
+  return runs;
+}
+
+function drawSeries(values, top, withGrid) {
+  const el = svg("svg", { viewBox: "0 0 100 100", preserveAspectRatio: "none", "aria-hidden": "true" });
+  if (withGrid) for (const y of [0, 50, 100]) el.append(svg("line", { class: "grid", x1: 0, x2: 100, y1: y, y2: y }));
+  for (const run of linePaths(values, top)) {
+    const pts = run.length === 1 ? [[Math.max(0, run[0][0] - 1), run[0][1]], [Math.min(100, run[0][0] + 1), run[0][1]]] : run;
+    const line = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(2)} ${y.toFixed(2)}`).join(" ");
+    if (withGrid) el.append(svg("path", { class: "area", d: `${line} L${pts[pts.length - 1][0].toFixed(2)} 100 L${pts[0][0].toFixed(2)} 100 Z` }));
+    el.append(svg("path", { class: "line", d: line }));
+  }
+  return el;
+}
+
+// A small trend line for a table cell. The numbers are in the columns beside
+// it. Every row is drawn to the same scale (`peak`), so rows can be compared.
+function sparkline(values, peak) {
+  return h("div", { class: "spark" }, drawSeries(values, axisTop(peak, false), false));
+}
+
+// kind "sum": the values are counts per step and the headline is their total.
+// kind "size": the values are sizes and the headline is the latest one.
+function chartCard(title, values, hist, kind, fmt) {
+  const known = values.filter((v) => v !== null && v !== undefined);
+  const n = values.length;
+  const headline = kind === "sum" ? known.reduce((a, b) => a + b, 0) : (known.length ? known[known.length - 1] : null);
+  const rangeLabel = RANGES.find((r) => r[0] === hist.range)[1];
+  const sub = kind === "sum" ? `in the last ${rangeLabel}` : "now";
+  const head = h("div", { class: "head" }, h("h3", {}, title), h("span", { class: "spacer" }),
+    h("span", { class: "big" }, headline === null ? "no data" : fmt(headline)), h("span", { class: "muted" }, sub));
+  if (!known.length) return h("div", { class: "card chart" }, head, h("div", { class: "empty" }, "Nothing has been recorded for this period yet."));
+
+  // Byte amounts get an axis in binary units; counts a compact decimal one.
+  const top = axisTop(Math.max(...known), fmt === bytes);
+  const tick = (v) => (fmt === bytes ? fmt(v) : compact(v));
+  const cross = h("div", { class: "cross" });
+  const dot = h("div", { class: "dot" });
+  const tip = h("div", { class: "tip" });
+  const plot = h("div", { class: "plot", tabindex: "0", role: "img",
+    "aria-label": `${title}: ${fmt(headline)} ${sub}. Use the arrow keys to read each step, or open the table below.` },
+    drawSeries(values, top, true), cross, dot, tip);
+  let at = -1;
+  const show = (i) => {
+    at = Math.max(0, Math.min(n - 1, i));
+    const v = values[at];
+    const x = n > 1 ? (at / (n - 1)) * 100 : 50;
+    cross.style.left = `${x}%`;
+    cross.style.display = "block";
+    const has = v !== null && v !== undefined;
+    dot.style.display = has ? "block" : "none";
+    if (has) { dot.style.left = `${x}%`; dot.style.top = `${100 - (Math.min(v, top) / top) * 100}%`; }
+    tip.replaceChildren(h("strong", {}, has ? fmt(v) : "no data"), h("span", {}, stepLabel(hist, at)));
+    tip.style.display = "block";
+    tip.style.left = x <= 50 ? `calc(${x}% + 10px)` : "auto";
+    tip.style.right = x > 50 ? `calc(${100 - x}% + 10px)` : "auto";
+  };
+  const hide = () => { at = -1; for (const el of [cross, dot, tip]) el.style.display = "none"; };
+  plot.addEventListener("pointermove", (e) => {
+    const r = plot.getBoundingClientRect();
+    show(Math.round(((e.clientX - r.left) / Math.max(1, r.width)) * (n - 1)));
+  });
+  plot.addEventListener("pointerleave", () => { if (document.activeElement !== plot) hide(); });
+  plot.addEventListener("focus", () => { if (at < 0) show(n - 1); });
+  plot.addEventListener("blur", hide);
+  plot.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") { show((at < 0 ? n : at) - 1); e.preventDefault(); }
+    if (e.key === "ArrowRight") { show(at + 1); e.preventDefault(); }
+  });
+
+  return h("div", { class: "card chart" }, head,
+    h("div", { class: "frame" },
+      h("div", { class: "yaxis" }, [top, top / 2, 0].map((v) => h("span", {}, tick(v)))),
+      h("div", {}, plot,
+        h("div", { class: "xaxis" }, [0, Math.floor((n - 1) / 2), n - 1].map((i) => h("span", {}, stepLabel(hist, i).replace(/^week from /, "").replace(/ to .*/, "")))))),
+    h("details", {}, h("summary", {}, "Show as table"),
+      table(["Period", { label: title, num: true }], values.map((v, i) => h("tr", {},
+        td(stepLabel(hist, i), "nowrap"), td(v === null || v === undefined ? "no data" : fmt(v), "num"))))));
+}
+
 // --------------------------------------------------------------- overview
 
 async function overviewView() {
-  const o = await api("overview");
+  const [o, hist] = await Promise.all([api("overview"), api(`history?range=${state.range}`)]);
+  const old = o.repos.filter((r) => r.stale);
   const pending = o.repos.flatMap((r) => r.pending.map((seq) => ({ repo: r.name, seq })));
   const stuck = o.channels.flatMap((c) => c.repos.filter((r) => r.state !== "ok").map((r) => ({ ...r, channel: c.id })));
   const requests = Object.values(o.http.by_status).reduce((a, b) => a + b, 0);
@@ -158,6 +315,7 @@ async function overviewView() {
       tile(bytes(o.store.bytes), `stored in ${count(o.store.blobs, "file", "files")}`),
       tile(pending.length, "snapshots awaiting review", pending.length ? "alert" : ""),
       tile(stuck.length, "repositories not up to date", stuck.length ? "danger" : ""),
+      tile(old.length, "repositories with content older than their limit", old.length ? "alert" : ""),
       tile(o.wishes, "missing items requested"),
       tile(requests, `requests served, ${bytes(o.http.bytes_sent)} sent`)),
     pending.length > 0 && h("div", { class: "card" },
@@ -168,13 +326,20 @@ async function overviewView() {
     stuck.length > 0 && h("div", { class: "card" },
       h("div", { class: "head" }, h("h3", {}, "Needs attention")),
       table(["Repository", "State", "Why"], stuck.map((s) => h("tr", {}, td(s.repo), td(stateBadge(s.state)), td(s.detail))))),
+    rangePicker(),
+    h("div", { class: "charts" },
+      chartCard("Downloads", hist.requests.total, hist, "sum", num),
+      chartCard("Data sent", hist.bytes.total, hist, "sum", bytes),
+      chartCard("Requests for missing items", hist.misses.total, hist, "sum", num),
+      chartCard("Storage used", hist.storage.total, hist, "size", bytes)),
     h("div", { class: "card" },
       h("div", { class: "head" }, h("h3", {}, "Repositories")),
-      table(["Name", "Format", "Access", "Published", "Newest", { label: "Size", num: true }, "Quota"],
+      table(["Name", "Format", "Access", "Published", "Content from", "Newest", { label: "Size", num: true }, "Quota"],
         o.repos.map((r) => h("tr", {},
           td(r.name), td(r.format),
           td(r.private ? badge("token required", "warn") : badge("open")),
           td(r.live ? badge(`snapshot #${r.live}`, "live") : badge("nothing published")),
+          td(r.live ? h("span", { title: when(r.live_at) }, ago(r.live_at), " ", r.stale && badge(`older than ${r.stale_after_days} days`, "warn")) : ""),
           td(r.newest ? `#${r.newest}` : "none"),
           td(bytes(r.bytes), "num"),
           td(quotaBar(r)))), "No repositories yet.")));
@@ -339,14 +504,19 @@ async function decide(repo, seq, action) {
 async function settingsDialog(r) {
   const priv = h("input", { type: "checkbox", checked: r.private });
   const quota = h("input", { type: "number", min: "0", step: "1", value: r.quota_bytes ? Math.round(r.quota_bytes / 1048576) : "" });
+  const stale = h("input", { type: "number", min: "1", max: "3650", step: "1", value: r.stale_after_days || "" });
   const ok = await confirmDialog(`Settings for ${r.name}`, [
     h("p", {}, h("label", {}, priv, " Require an access token to download from this repository")),
     h("label", { class: "f" }, "Size limit in MiB (empty for no limit)", quota),
+    h("label", { class: "f" }, "Report as out of date when the published content is older than this many days (empty for never)", stale),
   ], "Save", false);
   if (!ok) return;
   const mib = Number(quota.value);
+  const days = Math.floor(Number(stale.value));
   try {
-    await api(`repos/${encodeURIComponent(r.name)}/settings`, { private: priv.checked, quota_bytes: mib > 0 ? mib * 1048576 : null });
+    await api(`repos/${encodeURIComponent(r.name)}/settings`, {
+      private: priv.checked, quota_bytes: mib > 0 ? mib * 1048576 : null, stale_after_days: days > 0 ? days : null,
+    });
     flash("good", `Settings of ${r.name} saved.`);
   } catch (err) { flash("bad", err.message); }
 }
@@ -380,14 +550,29 @@ async function wishlistView() {
 // ---------------------------------------------------------------- traffic
 
 async function trafficView() {
-  const t = await api("traffic");
+  const [t, hist] = await Promise.all([api("traffic"), api(`history?range=${state.range}`)]);
   const max = Math.max(1, ...t.repos.map((r) => r.bytes));
+  const sum = (a) => (a || []).reduce((x, y) => x + y, 0);
+  const names = [...new Set([...Object.keys(hist.requests.by_repo), ...Object.keys(hist.misses.by_repo)])]
+    .sort((a, b) => sum(hist.requests.by_repo[b]) - sum(hist.requests.by_repo[a]) || a.localeCompare(b));
+  const rangeLabel = RANGES.find((r) => r[0] === hist.range)[1];
+  const peak = Math.max(0, ...Object.values(hist.requests.by_repo).flat());
   return h("div", {}, h("h2", {}, "Traffic"),
-    h("div", { class: "card" }, h("div", { class: "head" }, h("h3", {}, "By repository")),
+    rangePicker(),
+    h("div", { class: "charts" },
+      chartCard("Downloads", hist.requests.total, hist, "sum", num),
+      chartCard("Data sent", hist.bytes.total, hist, "sum", bytes)),
+    h("div", { class: "card" }, h("div", { class: "head" }, h("h3", {}, `By repository, last ${rangeLabel}`)),
+      table(["Repository", "Downloads over time", { label: "Downloads", num: true }, { label: "Sent", num: true }, { label: "Missing items asked for", num: true }],
+        names.map((name) => h("tr", {},
+          td(name), td(sparkline(hist.requests.by_repo[name] || new Array(hist.points).fill(0), peak)),
+          td(num(sum(hist.requests.by_repo[name])), "num"), td(bytes(sum(hist.bytes.by_repo[name])), "num"),
+          td(num(sum(hist.misses.by_repo[name])), "num"))), "Nothing was downloaded in this period.")),
+    h("div", { class: "card" }, h("div", { class: "head" }, h("h3", {}, "By repository, since the beginning")),
       table(["Repository", { label: "Downloads", num: true }, { label: "Sent", num: true }, ""], t.repos.map((r) => {
         const fill = h("i", {});
         fill.style.width = `${Math.round((r.bytes / max) * 100)}%`;
-        return h("tr", {}, td(r.repo), td(r.hits, "num"), td(bytes(r.bytes), "num"), td(h("div", { class: "bar" }, fill)));
+        return h("tr", {}, td(r.repo), td(num(r.hits), "num"), td(bytes(r.bytes), "num"), td(h("div", { class: "bar" }, fill)));
       }), "Nothing has been downloaded yet.")),
     h("div", { class: "card" }, h("div", { class: "head" }, h("h3", {}, "Most downloaded files")),
       table(["Repository", "Path", { label: "Downloads", num: true }, { label: "Sent", num: true }, "Last"], t.top.map((r) => h("tr", {},
@@ -541,7 +726,9 @@ async function render() {
   }
   // Keep the read-only pages fresh without disturbing forms or dialogs.
   if (["overview", "transfers"].includes(state.tab)) {
-    state.timer = setTimeout(() => { if (!document.querySelector("dialog[open]")) render(); }, 15000);
+    // Not while a dialog is open or a chart is being read.
+    const busy = () => document.querySelector("dialog[open]") || document.querySelector(".plot:hover, .plot:focus, details[open]");
+    state.timer = setTimeout(function again() { if (busy()) state.timer = setTimeout(again, 5000); else render(); }, 30000);
   }
 }
 

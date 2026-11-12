@@ -11,6 +11,8 @@ pub struct Repo {
     pub quota_bytes: Option<u64>,
     /// Private repos are served only to clients presenting a valid token.
     pub private: bool,
+    /// Report the repo as out of date when what is published is older than this.
+    pub stale_after_days: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,14 +156,14 @@ impl Tx<'_> {
             return Err(MetaError::Conflict(format!("repo {name} already exists")));
         }
         self.c.execute("INSERT INTO repo(name, format) VALUES (?1, ?2)", params![name, format])?;
-        Ok(Repo { id: self.c.last_insert_rowid(), name: name.into(), format: format.into(), quota_bytes: None, private: false })
+        Ok(Repo { id: self.c.last_insert_rowid(), name: name.into(), format: format.into(), quota_bytes: None, private: false, stale_after_days: None })
     }
 
     pub fn repo_get(&self, name: &str) -> Result<Option<Repo>> {
         Ok(self
             .c
             .query_row(
-                "SELECT id, name, format, quota_bytes, access FROM repo WHERE name = ?1",
+                "SELECT id, name, format, quota_bytes, access, stale_after_days FROM repo WHERE name = ?1",
                 params![name],
                 |r| {
                     Ok(Repo {
@@ -170,6 +172,7 @@ impl Tx<'_> {
                         format: r.get(2)?,
                         quota_bytes: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
                         private: r.get::<_, String>(4)? == "private",
+                        stale_after_days: r.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                     })
                 },
             )
@@ -181,7 +184,7 @@ impl Tx<'_> {
     }
 
     pub fn repo_list(&self) -> Result<Vec<Repo>> {
-        let mut st = self.c.prepare("SELECT id, name, format, quota_bytes, access FROM repo ORDER BY name")?;
+        let mut st = self.c.prepare("SELECT id, name, format, quota_bytes, access, stale_after_days FROM repo ORDER BY name")?;
         let rows = st.query_map([], |r| {
             Ok(Repo {
                 id: r.get(0)?,
@@ -189,6 +192,7 @@ impl Tx<'_> {
                 format: r.get(2)?,
                 quota_bytes: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
                 private: r.get::<_, String>(4)? == "private",
+                stale_after_days: r.get::<_, Option<i64>>(5)?.map(|v| v as u32),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -199,6 +203,11 @@ impl Tx<'_> {
             "UPDATE repo SET access = ?2 WHERE id = ?1",
             params![repo_id, if private { "private" } else { "public" }],
         )?;
+        Ok(())
+    }
+
+    pub fn repo_set_stale_days(&self, repo_id: i64, days: Option<u32>) -> Result<()> {
+        self.c.execute("UPDATE repo SET stale_after_days = ?2 WHERE id = ?1", params![repo_id, days])?;
         Ok(())
     }
 

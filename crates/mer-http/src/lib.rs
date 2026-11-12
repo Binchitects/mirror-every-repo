@@ -140,12 +140,20 @@ impl App {
             return;
         }
         let now = now_ms();
+        let hour = mer_meta::hour_of(now);
         let _ = self.st.meta().write(|t| {
             for ((repo, path), (hits, bytes)) in &batch {
                 t.traffic_add(repo, path, *hits, *bytes, now)?;
+                t.history_add("requests", repo, hour, *hits)?;
+                t.history_add("bytes", repo, hour, *bytes)?;
             }
             Ok(())
         });
+    }
+
+    /// Record the current sizes for the storage charts.
+    pub fn sample_sizes(&self) {
+        let _ = self.st.meta().write(|t| t.history_sample_sizes(now_ms()));
     }
 }
 
@@ -183,6 +191,22 @@ impl HttpServer {
         let server = Arc::new(server);
         let addr = server.server_addr().to_ip().ok_or_else(|| bind("not an IP address".into()))?;
         let stop = Arc::new(AtomicBool::new(false));
+        // Sizes are sampled while the server runs, so the storage charts
+        // have points even when nobody is looking.
+        app.sample_sizes();
+        let sampler = {
+            let (app, stop) = (app.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let mut last = Instant::now();
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(200));
+                    if last.elapsed() >= Duration::from_secs(600) {
+                        app.sample_sizes();
+                        last = Instant::now();
+                    }
+                }
+            })
+        };
         let workers = (0..cfg.threads.max(1))
             .map(|_| {
                 let (server, app, stop) = (server.clone(), app.clone(), stop.clone());
@@ -196,6 +220,7 @@ impl HttpServer {
                     }
                 })
             })
+            .chain(std::iter::once(sampler))
             .collect();
         Ok(HttpServer { addr, app, stop, workers })
     }

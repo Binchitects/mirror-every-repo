@@ -392,6 +392,9 @@ fn panel_files_are_served_with_a_strict_content_policy() {
     // The panel never builds pages from HTML strings, and loads nothing from other hosts.
     let js = c.get("/ui/app.js").text;
     assert!(!js.contains("innerHTML") && !js.contains("document.write") && !js.contains("eval("));
+    // (The SVG namespace is a name, not an address: nothing is fetched from it.)
+    assert_eq!(js.matches("http://").count(), 1);
+    let js = js.replace("\"http://www.w3.org/2000/svg\"", "");
     for file in [&js, &page.text, &c.get("/ui/app.css").text] {
         assert!(!file.contains("http://") && !file.contains("https://"), "external reference in a panel file");
     }
@@ -512,4 +515,81 @@ fn tls_listener_serves_https_and_marks_the_cookie_secure() {
         HttpServer::start(r.app.clone(), ServerConfig { listen: "127.0.0.1:0".into(), tls: Some((b"junk".to_vec(), b"junk".to_vec())), ..Default::default() }),
         Err(HttpError::Tls(_))
     ));
+}
+
+#[test]
+fn history_gives_the_charts_their_series() {
+    let r = rig();
+    let pkg = Client::new(&r);
+    for _ in 0..3 {
+        assert_eq!(pkg.get("/tools/a.txt").status, 200);
+    }
+    assert_eq!(pkg.get("/tools/missing-1.0.tgz").status, 404);
+    // Something that happened earlier, and a size from before the window.
+    let now_hour = mer_meta::hour_of(mer_storage::now_ms());
+    r.st.meta()
+        .write(|t| {
+            t.history_add("requests", "tools", now_hour - 30, 10)?;
+            t.history_add("requests", "old-repo", now_hour - 3, 5)?;
+            t.history_set("repo_bytes", "tools", now_hour - 24 * 300, 1)?;
+            t.history_set("store_bytes", "", now_hour - 10, 500)
+        })
+        .unwrap();
+
+    let c = Client::login(&r, "vic");
+    for (range, step, points) in [("24h", 1, 24), ("7d", 6, 28), ("30d", 24, 30), ("1y", 168, 52)] {
+        let h = c.get(&format!("/api/history?range={range}")).json;
+        assert_eq!((h["step_hours"].as_i64(), h["points"].as_u64()), (Some(step), Some(points)), "{range}");
+        let sum = |v: &Value| v.as_array().unwrap().iter().map(|x| x.as_u64().unwrap_or(0)).sum::<u64>();
+        for series in [&h["requests"]["total"], &h["storage"]["total"], &h["storage"]["by_repo"]["tools"]] {
+            assert_eq!(series.as_array().unwrap().len() as u64, points, "{range}");
+        }
+        // The window ends after now and covers the whole range.
+        let start = h["start_ms"].as_i64().unwrap();
+        let end = start + step * points as i64 * mer_meta::HOUR_MS;
+        assert!(end > mer_storage::now_ms() && end - mer_storage::now_ms() <= step * mer_meta::HOUR_MS, "{range}");
+        assert_eq!(sum(&h["requests"]["total"]), if range == "24h" { 8 } else { 18 }, "{range}");
+        assert_eq!(sum(&h["requests"]["by_repo"]["tools"]), if range == "24h" { 3 } else { 13 }, "{range}");
+        assert_eq!(sum(&h["bytes"]["total"]), 9, "{range}");
+        assert_eq!(sum(&h["misses"]["by_repo"]["tools"]), 1, "{range}");
+        // Sizes: the latest sample is the current size, and gaps keep the previous value.
+        let storage = h["storage"]["total"].as_array().unwrap();
+        let known: Vec<u64> = storage.iter().filter_map(Value::as_u64).collect();
+        let (blobs_bytes, repo_bytes) = r.st.meta().read(|t| Ok((t.blob_count()?.1, t.repo_usage(t.repo_require("tools")?.id)?))).unwrap();
+        assert_eq!(*known.last().unwrap(), blobs_bytes, "{range}");
+        if range == "24h" {
+            // An earlier sample shows until the next one; in coarser steps it shares a step with the current one.
+            assert!(known.contains(&500), "{range}: {known:?}");
+        }
+        let tools: Vec<u64> = h["storage"]["by_repo"]["tools"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+        assert_eq!(*tools.last().unwrap(), repo_bytes);
+        if range != "1y" {
+            assert_eq!(tools[0], 1, "{range}: the size before the window carries into it");
+        }
+        assert!(h["storage"]["by_repo"].get("old-repo").is_none());
+    }
+    assert_eq!(c.get("/api/history?range=5m").status, 400);
+    assert_eq!(Client::new(&r).get("/api/history").status, 401);
+}
+
+#[test]
+fn repositories_report_how_old_they_are_and_when_that_is_too_old() {
+    let r = rig();
+    let admin = Client::login(&r, "admin");
+    let repo = |c: &Client| c.get("/api/overview").json["repos"][0].clone();
+    let before = repo(&admin);
+    assert!(before["live_at"].as_i64().unwrap() > 0);
+    assert_eq!((before["stale"].clone(), before["stale_after_days"].clone()), (json!(false), Value::Null));
+
+    assert_eq!(admin.post("/api/repos/tools/settings", json!({ "stale_after_days": 7 })).status, 200);
+    assert_eq!((repo(&admin)["stale"].clone(), repo(&admin)["stale_after_days"].clone()), (json!(false), json!(7)));
+    // Make what is published eight days old.
+    r.st.meta().write(|t| t.raw_execute("UPDATE snapshot SET sealed_at = sealed_at - 8 * 86400000")).unwrap();
+    assert_eq!(repo(&admin)["stale"], json!(true));
+    assert_eq!(admin.post("/api/repos/tools/settings", json!({ "stale_after_days": null })).status, 200);
+    assert_eq!(repo(&admin)["stale"], json!(false));
+    for bad in [json!(0), json!(-3), json!("soon"), json!(99999)] {
+        assert_eq!(admin.post("/api/repos/tools/settings", json!({ "stale_after_days": bad })).status, 400);
+    }
+    assert_eq!(Client::login(&r, "olga").post("/api/repos/tools/settings", json!({ "stale_after_days": 7 })).status, 403);
 }

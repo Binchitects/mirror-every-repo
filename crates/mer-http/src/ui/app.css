@@ -99,3 +99,26 @@ dialog h3 { margin-top: 4px; }
 .op-add { color: var(--good); font-weight: 700; }
 .op-change { color: var(--warn); font-weight: 700; }
 .op-remove { color: var(--bad); font-weight: 700; }
+
+.ranges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.ranges .btn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 16px; margin-bottom: 16px; }
+.charts > .card { margin-bottom: 0; min-width: 0; }
+.chart .big { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart .frame { display: grid; grid-template-columns: auto 1fr; gap: 8px; }
+.chart .yaxis { display: flex; flex-direction: column; justify-content: space-between; height: 140px; text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; line-height: 1; }
+.chart .xaxis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11.5px; margin-top: 4px; white-space: nowrap; }
+.plot { position: relative; height: 140px; cursor: crosshair; border-radius: 4px; touch-action: pan-y; }
+.plot svg, .spark svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.plot .grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.plot .line, .spark .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.plot .area { fill: var(--accent); opacity: .1; }
+.plot .cross { display: none; position: absolute; top: 0; bottom: 0; width: 1px; background: var(--muted); pointer-events: none; }
+.plot .dot { display: none; position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--panel); pointer-events: none; }
+.plot .tip { display: none; position: absolute; top: 4px; z-index: 1; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; box-shadow: 0 2px 8px rgba(0, 0, 0, .15); white-space: nowrap; font-size: 12.5px; }
+.plot .tip strong { display: block; font-size: 14px; font-variant-numeric: tabular-nums; }
+.plot .tip span { color: var(--muted); }
+.spark { width: 140px; height: 24px; }
+.chart details { margin-top: 10px; }
+.chart summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.chart details .scroll { max-height: 260px; overflow-y: auto; margin-top: 6px; }

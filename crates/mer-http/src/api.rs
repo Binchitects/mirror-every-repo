@@ -6,6 +6,7 @@ use mer_core::EntryOp;
 use mer_meta::MetaError;
 use mer_storage::StorageError;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::sync::atomic::Ordering;
 use tiny_http::{Method, Request};
@@ -175,6 +176,7 @@ fn get(app: &App, me: &Identity, segments: &[&str], query: &str) -> ApiResult {
     match segments {
         ["me"] => Ok(me_json(me)),
         ["overview"] => overview(app),
+        ["history"] => history(app, query),
         ["repos", repo, "snapshots"] => {
             let rows = st.meta().read(|t| {
                 let r = t.repo_require(repo)?;
@@ -284,8 +286,68 @@ fn get(app: &App, me: &Identity, segments: &[&str], query: &str) -> ApiResult {
     }
 }
 
+/// Time series for the charts. The window ends now and is cut into equal
+/// steps; counters are summed per step, sizes show the last sample of each
+/// step (and keep the previous value where there was no sample).
+fn history(app: &App, query: &str) -> ApiResult {
+    let range = query.split('&').find_map(|kv| kv.strip_prefix("range=")).unwrap_or("7d");
+    let (step, points): (i64, usize) = match range {
+        "24h" => (1, 24),
+        "7d" => (6, 28),
+        "30d" => (24, 30),
+        "1y" => (168, 52),
+        _ => return Err(bad("range must be 24h, 7d, 30d or 1y")),
+    };
+    app.flush_traffic();
+    app.sample_sizes();
+    let now_hour = mer_meta::hour_of(mer_storage::now_ms());
+    // The window ends at the next step boundary, so the current hour is inside it.
+    let end = (now_hour + step).div_euclid(step) * step;
+    let start = end - step * points as i64;
+    let slot = |hour: i64| ((hour - start) / step) as usize;
+    let st = &app.st;
+    let mut out = json!({ "range": range, "step_hours": step, "start_ms": start * mer_meta::HOUR_MS, "points": points });
+    st.meta().read(|t| {
+        for metric in ["requests", "bytes", "misses"] {
+            let mut total = vec![0u64; points];
+            let mut by_repo: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+            for p in t.history_range(metric, start, end)? {
+                total[slot(p.hour)] += p.value;
+                by_repo.entry(p.key).or_insert_with(|| vec![0; points])[slot(p.hour)] += p.value;
+            }
+            out[metric] = json!({ "total": total, "by_repo": by_repo });
+        }
+        let sizes = |metric: &str| -> mer_meta::Result<BTreeMap<String, Vec<Option<u64>>>> {
+            let mut series: BTreeMap<String, Vec<Option<u64>>> = BTreeMap::new();
+            for p in t.history_before(metric, start)? {
+                series.entry(p.key).or_insert_with(|| vec![None; points])[0] = Some(p.value);
+            }
+            for p in t.history_range(metric, start, end)? {
+                series.entry(p.key).or_insert_with(|| vec![None; points])[slot(p.hour)] = Some(p.value);
+            }
+            let now_slot = slot(now_hour);
+            for values in series.values_mut() {
+                for i in 1..=now_slot.min(points - 1) {
+                    if values[i].is_none() {
+                        values[i] = values[i - 1];
+                    }
+                }
+            }
+            Ok(series)
+        };
+        let store = sizes("store_bytes")?.remove("").unwrap_or_else(|| vec![None; points]);
+        // Repositories that no longer exist are left out of the breakdown.
+        let names: Vec<String> = t.repo_list()?.into_iter().map(|r| r.name).collect();
+        let by_repo: BTreeMap<String, Vec<Option<u64>>> = sizes("repo_bytes")?.into_iter().filter(|(k, _)| names.contains(k)).collect();
+        out["storage"] = json!({ "total": store, "by_repo": by_repo });
+        Ok(())
+    })?;
+    Ok(out)
+}
+
 fn overview(app: &App) -> ApiResult {
     let st = &app.st;
+    let now = mer_storage::now_ms();
     let v = st.meta().read(|t| {
         let (blobs, bytes) = t.blob_count()?;
         let repos = t.repo_list()?;
@@ -294,6 +356,15 @@ fn overview(app: &App) -> ApiResult {
             let live = t.live(r.id)?;
             let head = t.snapshot_head(r.id)?;
             let live_seq = live.as_ref().map(|l| l.seq);
+                // How old what clients get is: when the published snapshot was sealed.
+                let live_at = match live_seq {
+                    Some(seq) => t.snapshot_get(r.id, seq)?.and_then(|s| s.sealed_at),
+                    None => None,
+                };
+                let stale = match (live_at, r.stale_after_days) {
+                    (Some(at), Some(days)) => now - at > i64::from(days) * 86_400_000,
+                    _ => false,
+                };
             // Sealed snapshots newer than what is live: waiting for a decision.
             let pending: Vec<u64> = t
                 .snapshot_list(r.id)?
@@ -305,6 +376,7 @@ fn overview(app: &App) -> ApiResult {
                 "name": r.name, "format": r.format, "private": r.private,
                 "quota_bytes": r.quota_bytes, "bytes": t.repo_usage(r.id)?,
                 "live": live_seq, "live_kind": live.map(|l| l.kind),
+                "live_at": live_at, "stale_after_days": r.stale_after_days, "stale": stale,
                 "newest": head.as_ref().map(|h| h.seq),
                 "files": head.as_ref().map(|h| h.entry_count),
                 "pending": pending,
@@ -377,6 +449,11 @@ fn post(app: &App, me: &Identity, segments: &[&str], b: &Value) -> ApiResult {
                 Some(Value::Null) => Some(None),
                 Some(v) => Some(Some(v.as_u64().filter(|q| *q > 0).ok_or_else(|| bad("quota_bytes must be a positive number or null"))?)),
             };
+            let stale = match b.get("stale_after_days") {
+                None => None,
+                Some(Value::Null) => Some(None),
+                Some(v) => Some(Some(v.as_u64().filter(|d| (1..=3650).contains(d)).ok_or_else(|| bad("stale_after_days must be between 1 and 3650, or null"))? as u32)),
+            };
             st.meta().write(|t| {
                 let r = t.repo_require(repo)?;
                 if let Some(p) = private {
@@ -384,6 +461,9 @@ fn post(app: &App, me: &Identity, segments: &[&str], b: &Value) -> ApiResult {
                 }
                 if let Some(q) = quota {
                     t.repo_set_quota(r.id, q)?;
+                }
+                if let Some(days) = stale {
+                    t.repo_set_stale_days(r.id, days)?;
                 }
                 t.audit(mer_storage::now_ms(), actor, "repo.settings", &format!("{repo} {b}"))?;
                 Ok(())
