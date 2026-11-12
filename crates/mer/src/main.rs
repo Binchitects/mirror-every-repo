@@ -73,6 +73,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: PypiCmd,
     },
+    /// npm registries (collector side).
+    Npm {
+        #[command(subcommand)]
+        cmd: NpmCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -179,6 +184,29 @@ enum PypiCmd {
         #[arg(long)]
         pre: bool,
         /// Additional host the collector may download files from (repeatable).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum NpmCmd {
+    /// Mirror npm packages and their dependencies into a new snapshot of an npm repo.
+    Sync {
+        repo: String,
+        #[arg(long, default_value = "https://registry.npmjs.org")]
+        registry: String,
+        /// What to mirror: express, "lodash@^4.17", "@types/node@20", typescript@latest.
+        #[arg(long = "package", short = 'p', required = true)]
+        packages: Vec<String>,
+        /// Platform of the machines inside the air gap, in Node terms.
+        #[arg(long, default_value = "linux")]
+        os: String,
+        #[arg(long, default_value = "x64")]
+        cpu: String,
+        #[arg(long, default_value = "glibc")]
+        libc: String,
+        /// Additional host the collector may download tarballs from (repeatable).
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
@@ -885,6 +913,32 @@ fn main() -> Result<()> {
                     "{} projects, {} files; downloaded {} ({}), {} already in the store",
                     rep.projects.len(),
                     rep.files,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused
+                );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Npm { cmd } => match cmd {
+            NpmCmd::Sync { repo, registry, packages, os, cpu, libc, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                hosts.push(mer_fetch::host_of(&registry).ok_or_else(|| anyhow!("{registry:?} is not an http(s) URL"))?);
+                let client = mer_fetch::HttpClient::new(&hosts);
+                let cfg = mer_format_npm::NpmConfig { registry, packages, os, cpu, libc };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.registry, hosts.join(", "));
+                let rep = mer_format_npm::sync(&st, &repo, &client, &cfg)?;
+                println!(
+                    "{} packages, {} versions; downloaded {} ({}), {} already in the store",
+                    rep.packages,
+                    rep.versions,
                     rep.downloaded,
                     human(rep.downloaded_bytes),
                     rep.reused

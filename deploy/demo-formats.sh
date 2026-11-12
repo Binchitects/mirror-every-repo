@@ -12,6 +12,7 @@ cd "$(dirname "$0")/.."
 C="docker compose exec -T collector"
 V="docker compose exec -T vault"
 PY="docker compose exec -T pyclient"
+NODE="docker compose exec -T nodeclient"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK: %s\n' "$*"; }
 fail() { printf '  FAILED: %s\n' "$*"; exit 1; }
@@ -64,7 +65,27 @@ $PY sh -c "$PIP flask" 2>&1 | tail -1 | sed 's/^/  | /'
 OUT=$($PY python -c 'import flask; print(flask.Flask("x").name)' | tr -d '\r')
 [ "$OUT" = "x" ] && ok "flask installs and runs after the next bundle" || fail "flask did not run"
 
-step "7. vault: state and integrity"
+step "7. npm: mirror 'express' from registry.npmjs.org"
+$C mer repo add npm --format npm
+$C mer npm sync npm -p express
+carry
+
+step "8. npm: install with a stock npm that can only reach the vault"
+$NODE timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "node client can reach the internet" || ok "node client cannot reach the internet"
+NPM="npm install --registry http://vault:8080/npm/ --no-audit --no-fund --loglevel=error"
+$NODE sh -c "mkdir -p /tmp/app && cd /tmp/app && npm init -y >/dev/null && $NPM express" 2>&1 | tail -2 | sed 's/^/  | /'
+OUT=$($NODE sh -c 'cd /tmp/app && node -e "const e = require(\"express\"); const a = e(); console.log(typeof a.listen, require(\"express/package.json\").version)"' | tr -d '\r')
+case "$OUT" in "function "*) ok "express installed from the vault and loads: version ${OUT#function }" ;; *) fail "express did not load: $OUT" ;; esac
+COUNT=$($NODE sh -c 'ls /tmp/app/node_modules | wc -l' | tr -d '\r ')
+ok "$COUNT packages in node_modules, all from the vault"
+$NODE sh -c 'cd /tmp/app && grep -c "\"resolved\": \"http://vault:8080/npm/" package-lock.json' | sed 's/^/  lockfile entries resolved to the vault: /'
+if $NODE sh -c 'cd /tmp/app && grep -q "registry.npmjs.org" package-lock.json'; then fail "the lockfile mentions the upstream registry"
+else ok "nothing in the lockfile points at the upstream registry"; fi
+if $NODE sh -c "cd /tmp/app && $NPM left-pad" >/dev/null 2>&1; then fail "left-pad was installable although it is not mirrored"
+else ok "a package that is not mirrored cannot be installed"; fi
+case "$($V mer wishlist)" in *"npm  left-pad"*) ok "the request for left-pad is on the wishlist" ;; *) $V mer wishlist; fail "left-pad is not on the wishlist" ;; esac
+
+step "9. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log' | sed 's/^/  requests answered with 200: /'

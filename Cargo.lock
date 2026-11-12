@@ -700,6 +700,7 @@ dependencies = [
  "mer-crypto",
  "mer-fetch",
  "mer-format-apt",
+ "mer-format-npm",
  "mer-format-pypi",
  "mer-http",
  "mer-meta",
@@ -813,6 +814,25 @@ dependencies = [
  "mer-storage",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "mer-format-npm"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "mer-blob",
+ "mer-core",
+ "mer-fetch",
+ "mer-meta",
+ "mer-storage",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tiny_http",
 ]
 
 [[package]]
@@ -1214,6 +1234,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]

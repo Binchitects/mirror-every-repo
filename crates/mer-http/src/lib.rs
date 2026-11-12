@@ -337,7 +337,7 @@ fn route(app: &App, surface: Surface, req: &mut Request) -> Reply {
         return if surface.admin { ui::serve(path) } else { Reply::text(404, "not found\n") };
     }
     if surface.packages {
-        packages::serve(app, req, raw)
+        packages::serve(app, req, raw, surface.tls)
     } else {
         Reply::text(404, "not found\n")
     }
