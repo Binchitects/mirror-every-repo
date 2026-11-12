@@ -22,6 +22,7 @@ mer-format-apt = { path = "crates/mer-format-apt" }
 mer-format-pypi = { path = "crates/mer-format-pypi" }
 mer-format-npm = { path = "crates/mer-format-npm" }
 mer-format-oci = { path = "crates/mer-format-oci" }
+mer-format-nuget = { path = "crates/mer-format-nuget" }
 mer-http = { path = "crates/mer-http" }
 mer-auth = { path = "crates/mer-auth" }
 

@@ -98,7 +98,9 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool, via_v2: bool
     }
     // Formats whose clients ask for something other than a stored file path.
     let mut wish_as: Option<String> = None;
-    let mut record_wish = true;
+    // For formats with their own request conventions, only what the format
+    // handler recognises as a package request is a wish. Stray paths are not.
+    let mut record_wish = matches!(repo_row.format.as_str(), "raw" | "apt");
     match formats::route(app, req, tls, &repo_row, path) {
         formats::Route::Unhandled => {}
         formats::Route::Done(reply) => return reply,

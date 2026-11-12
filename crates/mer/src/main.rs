@@ -83,6 +83,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: OciCmd,
     },
+    /// NuGet feeds for .NET (collector side).
+    Nuget {
+        #[command(subcommand)]
+        cmd: NugetCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -232,6 +237,32 @@ enum OciCmd {
         platforms: Vec<String>,
         /// Additional host the collector may contact (repeatable), for
         /// example the token service of a private registry.
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum NugetCmd {
+    /// Mirror NuGet packages and their dependencies into a new snapshot of a nuget repo.
+    Sync {
+        repo: String,
+        /// Service index of the upstream feed.
+        #[arg(long, default_value = "https://api.nuget.org/v3/index.json")]
+        feed: String,
+        /// What to mirror (repeatable): Serilog (newest stable),
+        /// Newtonsoft.Json@13.0.3, "Foo@[1.0,2.0)".
+        #[arg(long = "package", short = 'p', required = true)]
+        packages: Vec<String>,
+        /// Target framework of the projects inside the air gap (repeatable):
+        /// net8.0, netstandard2.0, net48.
+        #[arg(long = "framework", required = true)]
+        frameworks: Vec<String>,
+        /// Let a package named without a version resolve to a pre-release.
+        #[arg(long)]
+        pre: bool,
+        /// Additional host the collector may contact (repeatable), if the
+        /// feed keeps packages or metadata on another host.
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
@@ -1016,6 +1047,32 @@ fn main() -> Result<()> {
                     "{} image manifests, {} blobs; downloaded {} ({}), {} already in the store",
                     rep.manifests,
                     rep.blobs,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused
+                );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Nuget { cmd } => match cmd {
+            NugetCmd::Sync { repo, feed, packages, frameworks, pre, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                hosts.push(mer_fetch::host_of(&feed).ok_or_else(|| anyhow!("{feed:?} is not an http(s) URL"))?);
+                let client = mer_fetch::HttpClient::new(&hosts);
+                let cfg = mer_format_nuget::NugetConfig { service_index: feed, packages, frameworks, prerelease: pre };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.service_index, hosts.join(", "));
+                let rep = mer_format_nuget::sync(&st, &repo, &client, &cfg)?;
+                println!(
+                    "{} packages, {} versions; downloaded {} ({}), {} already in the store",
+                    rep.packages,
+                    rep.versions,
                     rep.downloaded,
                     human(rep.downloaded_bytes),
                     rep.reused

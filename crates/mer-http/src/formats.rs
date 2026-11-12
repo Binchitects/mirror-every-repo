@@ -149,6 +149,51 @@ fn npm(app: &App, req: &Request, tls: bool, repo: &Repo, raw: &str) -> Route {
     }
 }
 
+// ----------------------------------------------------------------- nuget
+
+fn nuget_id(id: &str) -> bool {
+    let b = id.as_bytes();
+    !b.is_empty()
+        && b.len() <= 100
+        && b.iter().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
+        && b[0].is_ascii_alphanumeric()
+        && b[b.len() - 1].is_ascii_alphanumeric()
+        && !id.contains("..")
+}
+
+/// A NuGet client starts at `/v3/index.json`, which tells it where packages
+/// are. That address must be absolute, so the stored file carries a
+/// placeholder that is replaced with the address the client used. Package
+/// ids and versions are case-insensitive; the feed is stored lower-case.
+fn nuget(app: &App, req: &Request, tls: bool, repo: &Repo, raw: &str) -> Route {
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::json(400, json!({ "error": "bad request" }))) };
+    let path = path.to_ascii_lowercase();
+    if path == "v3/index.json" {
+        let Some(base) = own_base(req, tls, repo) else {
+            return Route::Done(Reply::json(400, json!({ "error": "a Host header is required" })));
+        };
+        return match small_blob(app, repo, "v3/index.json") {
+            Ok(Some(body)) => {
+                let text = String::from_utf8_lossy(&body).replace(NPM_PLACEHOLDER, &base);
+                Route::Done(Reply::bytes(200, "application/json", text.into_bytes()))
+            }
+            Ok(None) => Route::Done(Reply::json(404, json!({ "error": "not found" }))),
+            Err(()) => Route::Done(Reply::json(500, json!({ "error": "internal error" }))),
+        };
+    }
+    // Nothing else exists in a feed. Probes for services this vault does not
+    // offer (search, metadata) and malformed names are refused, not wished for.
+    let not_found = || Route::Done(Reply::json(404, json!({ "error": "not found" })));
+    let Some(rest) = path.strip_prefix("flat/") else { return not_found() };
+    let parts: Vec<&str> = rest.split('/').collect();
+    match parts.as_slice() {
+        // The version list of a package: asking for one that is not mirrored is a wish.
+        [id, "index.json"] if nuget_id(id) => Route::Mapped { path: path.clone(), wish: Some((*id).to_string()) },
+        [id, version, _file] if nuget_id(id) => Route::Mapped { path: path.clone(), wish: Some(format!("{id}/{version}")) },
+        _ => not_found(),
+    }
+}
+
 // ------------------------------------------------------------ containers
 
 const API_VERSION: (&str, &str) = ("Docker-Distribution-API-Version", "registry/2.0");
@@ -293,6 +338,7 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "pypi" => pypi(repo, path),
         "npm" => npm(app, req, tls, repo, path),
         "oci" => oci(app, repo, path),
+        "nuget" => nuget(app, req, tls, repo, path),
         _ => Route::Unhandled,
     }
 }

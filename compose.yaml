@@ -48,6 +48,16 @@ services:
     networks: [diode]
     profiles: [formats]
 
+  dotnetclient:
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+    environment:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+
   nodeclient:
     image: node:20-slim
     depends_on: [vault]

@@ -7,7 +7,7 @@ A package repository mirror for air-gapped networks, in Rust. One binary (`mer`)
 
 Bundles cross the gap on **removable media** (USB, disk, DVD) or through a **data diode** (one-way UDP with error correction). The collector never needs an answer from the vault.
 
-Status: built and tested end to end for five formats: apt, PyPI, npm, container images and raw files. Stock `apt-get`, `pip`, `npm` and `docker` install from the vault on machines with no internet access, and snapshots are reviewed and published from a web panel. See [docs/STATUS.md](docs/STATUS.md) and the target design in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Status: built and tested end to end for six formats: apt, PyPI, npm, NuGet (.NET), container images and raw files. Stock `apt-get`, `pip`, `npm`, `dotnet` and `docker` install from the vault on machines with no internet access, and snapshots are reviewed and published from a web panel. See [docs/STATUS.md](docs/STATUS.md) and the target design in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Build and test
 
@@ -29,7 +29,7 @@ bash deploy/demo-apt.sh
 bash deploy/demo-formats.sh
 ```
 
-The first demo starts a collector and a vault in two containers (the vault on a network with no route out), moves one bundle by media and one through the diode link, and checks the result at every step. The second mirrors real packages from deb.debian.org and installs them with `apt-get` on a third container that can reach only the vault. The third does the same for Python (`pip`), JavaScript (`npm`) and container images (`docker pull`).
+The first demo starts a collector and a vault in two containers (the vault on a network with no route out), moves one bundle by media and one through the diode link, and checks the result at every step. The second mirrors real packages from deb.debian.org and installs them with `apt-get` on a third container that can reach only the vault. The third does the same for Python (`pip`), JavaScript (`npm`), .NET (`dotnet restore`) and container images (`docker pull`).
 
 ## Mirror a Debian repository
 
@@ -53,7 +53,7 @@ mer serve --listen 0.0.0.0:8080
 deb [signed-by=/etc/apt/keyrings/site.asc] http://vault:8080/debian bookworm main
 ```
 
-## Mirror Python, npm and container images
+## Mirror Python, npm, .NET and container images
 
 ```text
 # collector
@@ -63,6 +63,9 @@ mer pypi sync pypi --python 3.12 -r requests -r "django>=4.2,<5"
 mer repo add npm --format npm
 mer npm sync npm -p express -p "@types/node@20"
 
+mer repo add nuget --format nuget
+mer nuget sync nuget --framework net8.0 -p Serilog.Sinks.Console -p Newtonsoft.Json@13.0.3
+
 mer repo add hub --format oci
 mer oci sync hub -i library/alpine:3.20 -i library/nginx:1.27 --platform linux/amd64
 
@@ -71,6 +74,7 @@ mer export seal --key /keys/bundle.key          # one bundle carries all repos
 # clients inside the air gap
 pip install --index-url http://vault:8080/pypi/simple/ --trusted-host vault requests
 npm install --registry http://vault:8080/npm/ --no-audit express
+dotnet nuget add source http://vault:8080/nuget/v3/index.json --name vault --allow-insecure-connections
 docker pull vault:8080/hub/library/alpine:3.20
 ```
 

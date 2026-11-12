@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Generates ../nuget_truth.json from the NuGet.Versioning and NuGet.Frameworks
+    libraries that the dotnet tooling itself uses. How to run it is described
+    at the top of Program.cs. The Rust tests in src/truth.rs must give the
+    same answers.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NuGet.Versioning" Version="6.11.1" />
+    <PackageReference Include="NuGet.Frameworks" Version="6.11.1" />
+  </ItemGroup>
+</Project>

@@ -328,3 +328,46 @@ fn private_image_repositories_ask_for_credentials_at_the_ping() {
     let wrong = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode("anything:mer_wrong"));
     assert_eq!(full(&r, "GET", "/v2/hub/library/app/manifests/1.0", &[("Authorization", &wrong)]).0, 401);
 }
+
+#[test]
+fn nuget_feed_is_found_the_way_dotnet_asks_for_it() {
+    let index = br#"{"version":"3.0.0","resources":[{"@id":"mer://base/flat/","@type":"PackageBaseAddress/3.0.0"}]}"#;
+    let r = rig(
+        "dn",
+        "nuget",
+        &[
+            ("v3/index.json", index),
+            ("flat/newtonsoft.json/index.json", br#"{"versions":["13.0.3"]}"#),
+            ("flat/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg", b"nupkg bytes"),
+        ],
+    );
+    let host = r.base.trim_start_matches("http://").to_string();
+
+    // The service index names the package location on this very server.
+    let (status, body, _, ct) = get(&r, "/dn/v3/index.json");
+    assert_eq!((status, ct.as_deref()), (200, Some("application/json")));
+    let doc: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let flat = doc["resources"][0]["@id"].as_str().unwrap().to_string();
+    assert_eq!(flat, format!("http://{host}/dn/flat/"));
+    assert!(!body.contains("mer://"));
+
+    // Following it: version list, then the package. Clients may send any case.
+    let rel = flat.trim_start_matches(&r.base).to_string();
+    assert_eq!(get(&r, &format!("{rel}newtonsoft.json/index.json")).1, r#"{"versions":["13.0.3"]}"#);
+    assert_eq!(get(&r, &format!("{rel}newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg")).1, "nupkg bytes");
+    assert_eq!(get(&r, "/dn/flat/Newtonsoft.Json/index.json").0, 200);
+    assert_eq!(get(&r, "/dn/flat/NEWTONSOFT.JSON/13.0.3/Newtonsoft.Json.13.0.3.nupkg").1, "nupkg bytes");
+    assert_eq!(get(&r, "/dn/V3/index.json").0, 200);
+}
+
+#[test]
+fn nuget_requests_for_unmirrored_packages_become_wishes() {
+    let r = rig("dn", "nuget", &[("v3/index.json", b"{}"), ("flat/a/index.json", br#"{"versions":["1.0.0"]}"#)]);
+    assert_eq!(get(&r, "/dn/flat/dapper/index.json").0, 404);
+    assert_eq!(get(&r, "/dn/flat/Dapper/index.json").0, 404);
+    assert_eq!(get(&r, "/dn/flat/a/2.0.0/a.2.0.0.nupkg").0, 404);
+    for path in ["/dn/flat/..%2f..%2fmeta.db/index.json", "/dn/flat/a..b/index.json", "/dn/flat/index.json", "/dn/search?q=x", "/dn/flat/a/1.0.0/../../../../meta.db"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![("dapper".to_string(), 2), ("a/2.0.0".to_string(), 1)]);
+}
