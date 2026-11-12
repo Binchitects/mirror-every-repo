@@ -7,7 +7,7 @@ A package repository mirror for air-gapped networks, in Rust. One binary (`mer`)
 
 Bundles cross the gap on **removable media** (USB, disk, DVD) or through a **data diode** (one-way UDP with error correction). The collector never needs an answer from the vault.
 
-Status: the storage and transfer core, the apt format, HTTP(S) serving, access control and a web panel are built and tested: a stock `apt-get` on a machine with no internet access installs packages from the vault, and snapshots are reviewed and published from the browser. PyPI, npm and OCI are not built yet. See [docs/STATUS.md](docs/STATUS.md) and the target design in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Status: built and tested end to end for five formats: apt, PyPI, npm, container images and raw files. Stock `apt-get`, `pip`, `npm` and `docker` install from the vault on machines with no internet access, and snapshots are reviewed and published from a web panel. See [docs/STATUS.md](docs/STATUS.md) and the target design in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Build and test
 
@@ -25,7 +25,11 @@ bash deploy/demo.sh
 bash deploy/demo-apt.sh
 ```
 
-The first demo starts a collector and a vault in two containers (the vault on a network with no route out), moves one bundle by media and one through the diode link, and checks the result at every step. The second mirrors real packages from deb.debian.org and installs them with `apt-get` on a third container that can reach only the vault.
+```bash
+bash deploy/demo-formats.sh
+```
+
+The first demo starts a collector and a vault in two containers (the vault on a network with no route out), moves one bundle by media and one through the diode link, and checks the result at every step. The second mirrors real packages from deb.debian.org and installs them with `apt-get` on a third container that can reach only the vault. The third does the same for Python (`pip`), JavaScript (`npm`) and container images (`docker pull`).
 
 ## Mirror a Debian repository
 
@@ -48,6 +52,29 @@ mer serve --listen 0.0.0.0:8080
 # clients inside the air gap (site key copied to them once)
 deb [signed-by=/etc/apt/keyrings/site.asc] http://vault:8080/debian bookworm main
 ```
+
+## Mirror Python, npm and container images
+
+```text
+# collector
+mer repo add pypi --format pypi
+mer pypi sync pypi --python 3.12 -r requests -r "django>=4.2,<5"
+
+mer repo add npm --format npm
+mer npm sync npm -p express -p "@types/node@20"
+
+mer repo add hub --format oci
+mer oci sync hub -i library/alpine:3.20 -i library/nginx:1.27 --platform linux/amd64
+
+mer export seal --key /keys/bundle.key          # one bundle carries all repos
+
+# clients inside the air gap
+pip install --index-url http://vault:8080/pypi/simple/ --trusted-host vault requests
+npm install --registry http://vault:8080/npm/ --no-audit express
+docker pull vault:8080/hub/library/alpine:3.20
+```
+
+The panel shows the exact client lines for each repository under "Client setup". What clients ask for and the vault does not have appears on the wishlist (`mer wishlist`, or the Wishlist page).
 
 ## Web panel and access control
 
