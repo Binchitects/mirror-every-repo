@@ -30,6 +30,7 @@ mer-format-cargo.workspace = true
 mer-format-go.workspace = true
 mer-format-maven.workspace = true
 mer-format-rpm.workspace = true
+mer-ldap.workspace = true
 mer-http.workspace = true
 mer-auth.workspace = true
 rand.workspace = true

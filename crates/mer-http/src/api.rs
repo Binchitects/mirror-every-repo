@@ -63,6 +63,8 @@ impl From<AuthError> for ApiError {
             AuthError::Forbidden(_) => ApiError(403, e.to_string()),
             AuthError::Meta(m) => m.into(),
             AuthError::Hash(_) => ApiError(500, "internal error".into()),
+            // What went wrong is in the audit log and the server output, not on the sign-in page.
+            AuthError::Directory(_) => ApiError(503, "the directory cannot be asked right now; local users can still sign in".into()),
         }
     }
 }
@@ -388,6 +390,7 @@ fn get(app: &App, me: &Identity, segments: &[&str], query: &str) -> ApiResult {
             require(me.role, Role::Admin)?;
             Ok(json!(app.auth.users()?.iter().map(|u| json!({
                 "name": u.name, "role": u.role, "disabled": u.disabled, "created_at": u.created_at,
+                "source": if u.pw_hash == mer_auth::DIRECTORY_USER { "directory" } else { "local" },
             })).collect::<Vec<_>>()))
         }
         ["tokens"] => {
