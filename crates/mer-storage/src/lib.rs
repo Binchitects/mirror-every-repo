@@ -248,6 +248,17 @@ impl Storage {
         Ok(found)
     }
 
+    /// Paths of the published snapshot under `prefix` (empty when nothing is published).
+    pub fn list_published(&self, repo: &str, prefix: &str, limit: u32) -> Result<Vec<EntryRec>> {
+        Ok(self.meta.read(|t| {
+            let r = t.repo_require(repo)?;
+            match t.live(r.id)? {
+                Some(p) => t.entries_under(r.id, p.seq, prefix, limit),
+                None => Ok(Vec::new()),
+            }
+        })?)
+    }
+
     /// Look inside a specific snapshot that is still retained (for preview and tests).
     pub fn get_at(&self, repo: &str, seq: u64, path: &str) -> Result<Option<EntryRec>> {
         Ok(self.meta.read(|t| {

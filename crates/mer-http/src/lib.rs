@@ -325,6 +325,14 @@ fn route(app: &App, surface: Surface, req: &mut Request) -> Reply {
     if !read_only {
         return Reply::text(405, "method not allowed\n").with("Allow", "GET, HEAD");
     }
+    // Container registry API: /v2/<repo>/<image name>/...
+    if raw == "v2" || raw.starts_with("v2/") {
+        return if surface.packages {
+            formats::oci_entry(app, req, raw.strip_prefix("v2").unwrap_or("").trim_start_matches('/'), surface.tls)
+        } else {
+            Reply::text(404, "not found\n")
+        };
+    }
     match raw {
         "healthz" => return Reply::text(200, "ok\n"),
         "metrics" => return metrics_page(app),
@@ -337,7 +345,7 @@ fn route(app: &App, surface: Surface, req: &mut Request) -> Reply {
         return if surface.admin { ui::serve(path) } else { Reply::text(404, "not found\n") };
     }
     if surface.packages {
-        packages::serve(app, req, raw, surface.tls)
+        packages::serve(app, req, raw, surface.tls, false)
     } else {
         Reply::text(404, "not found\n")
     }

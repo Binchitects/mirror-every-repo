@@ -85,7 +85,35 @@ if $NODE sh -c "cd /tmp/app && $NPM left-pad" >/dev/null 2>&1; then fail "left-p
 else ok "a package that is not mirrored cannot be installed"; fi
 case "$($V mer wishlist)" in *"npm  left-pad"*) ok "the request for left-pad is on the wishlist" ;; *) $V mer wishlist; fail "left-pad is not on the wishlist" ;; esac
 
-step "9. vault: state and integrity"
+step "9. Containers: mirror 'alpine:3.20' from Docker Hub"
+$C mer repo add hub --format oci
+SYNC=$($C mer oci sync hub -i library/alpine:3.20 | tr -d '\r')
+echo "$SYNC"
+UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
+carry
+
+step "10. Containers: pull and run with a real Docker engine, from the vault only"
+# The vault itself has no published ports (its network is internal), so a
+# second server process on the same vault data is exposed on localhost for
+# the Docker engine of this machine. The image is pulled under a name that
+# exists nowhere else, so it can only have come from the vault.
+docker rm -f mer-registry >/dev/null 2>&1 || true
+docker run -d --name mer-registry -p 127.0.0.1:5005:8080 -v mer-demo_vault-data:/data mer:dev serve --quiet --no-admin >/dev/null
+sleep 2
+IMG=localhost:5005/hub/library/alpine:3.20
+docker rmi -f "$IMG" >/dev/null 2>&1 || true
+docker pull "$IMG" 2>&1 | tail -3 | sed 's/^/  | /'
+PULLED=$(docker image inspect "$IMG" --format '{{index .RepoDigests 0}}' | tr -d '\r')
+[ "${PULLED##*@}" = "$UPSTREAM_DIGEST" ] && ok "pulled digest equals the upstream digest ($UPSTREAM_DIGEST)" || fail "digest differs: $PULLED vs $UPSTREAM_DIGEST"
+OUT=$(docker run --rm --network none "$IMG" cat /etc/alpine-release | tr -d '\r')
+case "$OUT" in 3.20*) ok "the image runs: Alpine $OUT" ;; *) fail "image did not run: $OUT" ;; esac
+if docker pull localhost:5005/hub/library/busybox:latest >/dev/null 2>&1; then fail "busybox was pullable although it is not mirrored"
+else ok "an image that is not mirrored cannot be pulled"; fi
+case "$($V mer wishlist)" in *"images/library/busybox:latest"*) ok "the request for busybox is on the wishlist" ;; *) $V mer wishlist; fail "busybox is not on the wishlist" ;; esac
+docker rmi -f "$IMG" >/dev/null 2>&1 || true
+docker rm -f mer-registry >/dev/null 2>&1 || true
+
+step "11. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log' | sed 's/^/  requests answered with 200: /'
