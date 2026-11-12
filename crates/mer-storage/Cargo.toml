@@ -1,0 +1,13 @@
+[package]
+name = "mer-storage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-blob.workspace = true
+mer-meta.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

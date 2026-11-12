@@ -1,0 +1,16 @@
+[package]
+name = "mer-transport-diode"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-crypto.workspace = true
+mer-fec.workspace = true
+mer-bundle-format.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+mer-bundle.workspace = true
+mer-storage.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "mer-bundle-format"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-crypto.workspace = true
+serde.workspace = true
+ciborium.workspace = true
+crc32c.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "mer-bundle"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-crypto.workspace = true
+mer-blob.workspace = true
+mer-meta.workspace = true
+mer-storage.workspace = true
+mer-bundle-format.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

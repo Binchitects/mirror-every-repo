@@ -1,0 +1,11 @@
+[package]
+name = "mer-blob"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

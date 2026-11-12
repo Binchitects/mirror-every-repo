@@ -1,0 +1,13 @@
+[package]
+name = "mer-fetch"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+ureq.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tiny_http.workspace = true

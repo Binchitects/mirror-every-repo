@@ -1,0 +1,16 @@
+[package]
+name = "mer-auth"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-meta.workspace = true
+mer-storage.workspace = true
+argon2.workspace = true
+rand.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

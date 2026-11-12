@@ -1,0 +1,12 @@
+[package]
+name = "mer-meta"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
