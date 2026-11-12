@@ -30,6 +30,7 @@ mer-format-cargo = { path = "crates/mer-format-cargo" }
 mer-format-go = { path = "crates/mer-format-go" }
 mer-format-maven = { path = "crates/mer-format-maven" }
 mer-format-rpm = { path = "crates/mer-format-rpm" }
+mer-ldap = { path = "crates/mer-ldap" }
 mer-http = { path = "crates/mer-http" }
 mer-auth = { path = "crates/mer-auth" }
 
@@ -42,6 +43,7 @@ serde_yaml = "0.9"
 semver = "1"
 roxmltree = "0.20"
 ruzstd = "0.7"
+ldap3 = { version = "0.11", default-features = false, features = ["sync", "tls-rustls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 ureq = "2"

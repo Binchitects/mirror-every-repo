@@ -728,7 +728,9 @@ function usersCard(users) {
     table(["Name", "Role", "Status", "Created", ""], users.map((u) => {
       const sel = h("select", { onchange: () => update(u.name, { role: sel.value }, `${u.name} is now ${sel.value}.`) },
         ["viewer", "operator", "admin"].map((r) => h("option", { value: r, selected: r === u.role ? "" : null }, r)));
-      return h("tr", {}, td(u.name), td(sel), td(u.disabled ? badge("disabled", "bad") : badge("active", "good")), td(when(u.created_at), "nowrap"),
+      // The role of a directory user is decided by the groups in the directory, at each sign-in.
+      const role = u.source === "directory" ? h("span", {}, u.role, " ", badge("from the directory")) : sel;
+      return h("tr", {}, td(u.name), td(role), td(u.disabled ? badge("disabled", "bad") : badge("active", "good")), td(when(u.created_at), "nowrap"),
         td(h("div", { class: "actions" },
           h("button", { class: `btn ${u.disabled ? "" : "danger"}`, onclick: () => update(u.name, { disabled: !u.disabled }, `${u.name} ${u.disabled ? "enabled" : "disabled"}.`) }, u.disabled ? "Enable" : "Disable"))));
     })),

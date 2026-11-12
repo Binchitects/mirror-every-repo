@@ -38,7 +38,23 @@ pub enum AuthError {
     Meta(#[from] MetaError),
     #[error("password hashing failed: {0}")]
     Hash(String),
+    #[error("the directory cannot be asked right now: {0}")]
+    Directory(String),
 }
+
+/// Somewhere else that knows users and their passwords: a company
+/// directory (LDAP, Active Directory).
+pub trait Directory: Send + Sync {
+    /// `Ok(Some(role))`: the password is right and the user may use the
+    /// panel with that role. `Ok(None)`: wrong name or password, or a user
+    /// who is in none of the groups that grant a role. `Err`: the directory
+    /// could not be asked.
+    fn check(&self, name: &str, password: &str) -> Result<Option<Role>, String>;
+}
+
+/// Stored where a local user has a password hash. It is not a valid hash,
+/// so such a user can never sign in with a local password.
+pub const DIRECTORY_USER: &str = "!directory";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
@@ -88,6 +104,7 @@ pub struct Auth {
     /// A real hash of a throwaway password, verified against when the user
     /// does not exist, so that case costs the same time as a wrong password.
     decoy_hash: String,
+    directory: Mutex<Option<Arc<dyn Directory>>>,
 }
 
 fn random_hex() -> String {
@@ -143,7 +160,14 @@ fn identity(user: &UserRow, csrf: String) -> Result<Identity, AuthError> {
 impl Auth {
     pub fn new(st: Arc<Storage>) -> Self {
         let decoy_hash = hash_password(&random_hex()).unwrap_or_default();
-        Auth { st, failures: Mutex::default(), decoy_hash }
+        Auth { st, failures: Mutex::default(), decoy_hash, directory: Mutex::new(None) }
+    }
+
+    /// Also accept users of a directory. Local users keep working and are
+    /// checked first, so an administrator can still get in when the
+    /// directory is down.
+    pub fn set_directory(&self, directory: Arc<dyn Directory>) {
+        *self.directory.lock().unwrap_or_else(|e| e.into_inner()) = Some(directory);
     }
 
     /// True until the first user exists. The first user must be an admin.
@@ -169,6 +193,9 @@ impl Auth {
     }
 
     pub fn set_password(&self, name: &str, password: &str, actor: &str) -> Result<(), AuthError> {
+        if self.st.meta().read(|t| t.user_get(name))?.is_some_and(|u| u.pw_hash == DIRECTORY_USER) {
+            return Err(AuthError::Invalid(format!("{name} signs in through the directory; the password is changed there")));
+        }
         check_password(password)?;
         let hash = hash_password(password)?;
         self.st.meta().write(|t| {
@@ -221,15 +248,43 @@ impl Auth {
                 }
             }
         }
-        let user = self.st.meta().read(|t| t.user_get(name))?;
-        // Hash even when the user does not exist, so the answer takes the same
-        // time and does not reveal which names are real.
-        let good = match &user {
-            Some(u) => verify_password(password, &u.pw_hash) && !u.disabled,
-            None => {
-                verify_password(password, &self.decoy_hash);
-                false
+        let mut user = self.st.meta().read(|t| t.user_get(name))?;
+        let directory = self.directory.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let local = user.as_ref().is_some_and(|u| u.pw_hash != DIRECTORY_USER);
+        let good = match (&directory, local) {
+            // Not a local user, and there is a directory to ask.
+            (Some(directory), false) if check_name("user", name).is_ok() && !user.as_ref().is_some_and(|u| u.disabled) => {
+                match directory.check(name, password) {
+                    Ok(Some(role)) => {
+                        // Remember the user (for sessions and the audit log) with the role the directory gives now.
+                        let known = user.is_some();
+                        user = Some(self.st.meta().write(|t| {
+                            if !known {
+                                t.user_create(name, DIRECTORY_USER, role.as_str(), now_ms())?;
+                                t.audit(now_ms(), name, "user.from_directory", role.as_str())?;
+                            } else {
+                                t.user_set_role(name, role.as_str())?;
+                            }
+                            t.user_get(name)?.ok_or_else(|| MetaError::NotFound(name.to_string()))
+                        })?);
+                        true
+                    }
+                    Ok(None) => false,
+                    Err(e) => {
+                        let _ = self.st.meta().write(|t| t.audit(now_ms(), name, "login.directory_error", &e));
+                        return Err(AuthError::Directory(e));
+                    }
+                }
             }
+            // Hash even when the user does not exist, so the answer takes the same
+            // time and does not reveal which names are real.
+            _ => match &user {
+                Some(u) => verify_password(password, &u.pw_hash) && !u.disabled,
+                None => {
+                    verify_password(password, &self.decoy_hash);
+                    false
+                }
+            },
         };
         let Some(user) = user.filter(|_| good) else {
             let mut failures = self.failures.lock().unwrap_or_else(|e| e.into_inner());
@@ -483,5 +538,88 @@ mod tests {
             st.meta().read(|t| t.audit_list(10)).unwrap().into_iter().rev().map(|r| r.action).collect();
         assert_eq!(actions, ["user.create", "login.failed", "login", "token.create"]);
         assert_eq!(st.meta().read(|t| t.audit_verify()).unwrap(), Ok(4));
+    }
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+
+    const PW: &str = "a long enough password";
+
+    /// A directory with fixed users: name -> (password, role or none).
+    struct Fake {
+        users: Vec<(&'static str, &'static str, Option<Role>)>,
+        down: Mutex<bool>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl Directory for Fake {
+        fn check(&self, name: &str, password: &str) -> Result<Option<Role>, String> {
+            self.asked.lock().unwrap().push(name.to_string());
+            if *self.down.lock().unwrap() {
+                return Err("connection refused".into());
+            }
+            Ok(self.users.iter().find(|(n, p, _)| *n == name && *p == password).and_then(|(_, _, role)| *role))
+        }
+    }
+
+    fn rig() -> (tempfile::TempDir, Auth, Arc<Fake>) {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = Auth::new(Arc::new(Storage::open(dir.path()).unwrap()));
+        auth.create_user("root", PW, Role::Admin, "cli").unwrap();
+        let fake = Arc::new(Fake { users: vec![("dana", "dir-password-1", Some(Role::Operator)), ("norole", "dir-password-2", None)], down: Mutex::new(false), asked: Mutex::default() });
+        auth.set_directory(fake.clone());
+        (dir, auth, fake)
+    }
+
+    #[test]
+    fn directory_users_sign_in_with_the_role_the_directory_gives() {
+        let (_d, auth, fake) = rig();
+        let login = auth.login("dana", "dir-password-1").unwrap();
+        assert_eq!((login.identity.name.as_str(), login.identity.role), ("dana", Role::Operator));
+        assert_eq!(auth.session(&login.token).unwrap().role, Role::Operator);
+        let listed = auth.users().unwrap();
+        assert_eq!(listed.iter().find(|u| u.name == "dana").unwrap().pw_hash, DIRECTORY_USER);
+
+        assert!(matches!(auth.login("dana", "wrong"), Err(AuthError::BadCredentials)));
+        assert!(matches!(auth.login("norole", "dir-password-2"), Err(AuthError::BadCredentials)), "right password, but in no group that grants a role");
+        assert!(matches!(auth.login("nobody", "x"), Err(AuthError::BadCredentials)));
+        assert!(!auth.users().unwrap().iter().any(|u| u.name == "norole" || u.name == "nobody"), "only users who got in are remembered");
+        // A directory user has no local password: not to sign in with, not to set.
+        assert!(matches!(auth.login("dana", DIRECTORY_USER), Err(AuthError::BadCredentials)));
+        assert!(matches!(auth.set_password("dana", PW, "root"), Err(AuthError::Invalid(_))));
+        // Names that could not be local users are not sent to the directory at all.
+        assert!(matches!(auth.login("dana)(uid=*", "x"), Err(AuthError::BadCredentials)));
+        assert!(!fake.asked.lock().unwrap().iter().any(|n| n.contains('(')));
+    }
+
+    #[test]
+    fn local_users_come_first_and_work_when_the_directory_is_down() {
+        let (_d, auth, fake) = rig();
+        assert_eq!(auth.login("root", PW).unwrap().identity.role, Role::Admin);
+        assert!(matches!(auth.login("root", "wrong"), Err(AuthError::BadCredentials)));
+        assert!(fake.asked.lock().unwrap().is_empty(), "a local user's password never goes to the directory");
+
+        *fake.down.lock().unwrap() = true;
+        assert_eq!(auth.login("root", PW).unwrap().identity.role, Role::Admin);
+        assert!(matches!(auth.login("dana", "dir-password-1"), Err(AuthError::Directory(_))));
+    }
+
+    #[test]
+    fn role_changes_disabling_and_lockout_apply_to_directory_users() {
+        let (_d, auth, _fake) = rig();
+        auth.login("dana", "dir-password-1").unwrap();
+        // The role is what the directory says at each sign-in, not what was stored.
+        auth.update_user("dana", Some(Role::Viewer), None, "root").unwrap();
+        assert_eq!(auth.login("dana", "dir-password-1").unwrap().identity.role, Role::Operator);
+        // An administrator here can still shut a directory user out.
+        auth.update_user("dana", None, Some(true), "root").unwrap();
+        assert!(matches!(auth.login("dana", "dir-password-1"), Err(AuthError::BadCredentials)));
+        auth.update_user("dana", None, Some(false), "root").unwrap();
+        for _ in 0..MAX_FAILURES {
+            let _ = auth.login("dana", "wrong");
+        }
+        assert!(matches!(auth.login("dana", "dir-password-1"), Err(AuthError::LockedOut(_))));
     }
 }
