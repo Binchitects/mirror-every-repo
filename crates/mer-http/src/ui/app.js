@@ -451,7 +451,7 @@ function clientSetupDialog(r) {
       "<settings>", "  <mirrors>", "    <mirror>", "      <id>vault</id>", "      <mirrorOf>*</mirrorOf>", `      <url>${base}</url>`,
       "    </mirror>", "  </mirrors>",
     ].concat(r.private ? ["  <servers>", "    <server>", "      <id>vault</id>", "      <username>token</username>", "      <password><token></password>", "    </server>", "  </servers>"] : [], ["</settings>"]));
-    add("Gradle, in settings.gradle", ["dependencyResolutionManagement {", `  repositories { maven { url = uri("${base}")${secure ? "" : "; allowInsecureProtocol = true"} } }`, "}"]);
+    add("Gradle, in settings.gradle (libraries published with a POM; not tested end to end)", ["dependencyResolutionManagement {", `  repositories { maven { url = uri("${base}")${secure ? "" : "; allowInsecureProtocol = true"} } }`, "}"]);
     add("Then build as usual", ["mvn package"]);
   } else if (r.format === "go") {
     add("Point the go command at the vault (once per client)", [
