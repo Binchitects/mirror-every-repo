@@ -40,6 +40,14 @@ services:
     volumes:
       - media:/media:ro
 
+  # Stock language clients inside the air gap, used by deploy/demo-formats.sh.
+  pyclient:
+    image: python:3.12-slim
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+
 networks:
   internet: {}
   diode:

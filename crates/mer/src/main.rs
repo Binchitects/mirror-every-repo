@@ -68,6 +68,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: AptCmd,
     },
+    /// Python package indexes (collector side).
+    Pypi {
+        #[command(subcommand)]
+        cmd: PypiCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -144,6 +149,38 @@ enum KeyCmd {
         pubkeys: Vec<String>,
         #[arg(long, default_value_t = 1)]
         threshold: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum PypiCmd {
+    /// Mirror Python packages and their dependencies into a new snapshot of a pypi repo.
+    Sync {
+        repo: String,
+        /// Simple API of the upstream index (it must answer in JSON, PEP 691).
+        #[arg(long, default_value = "https://pypi.org/simple")]
+        index_url: String,
+        /// What to mirror, as pip would write it: requests, "django>=4.2,<5", "uvicorn[standard]".
+        #[arg(long = "requirement", short = 'r', required = true)]
+        requirements: Vec<String>,
+        /// CPython version used inside the air gap (repeatable), for example 3.11.
+        #[arg(long = "python", required = true)]
+        pythons: Vec<String>,
+        /// CPU architecture as wheel tags spell it.
+        #[arg(long, default_value = "x86_64")]
+        arch: String,
+        /// Accepted Linux wheel families (repeatable): manylinux, musllinux.
+        #[arg(long = "libc", default_value = "manylinux")]
+        libcs: Vec<String>,
+        /// Source archives: never, if-no-wheel or always.
+        #[arg(long, default_value = "if-no-wheel")]
+        sdists: String,
+        /// Allow pre-release versions.
+        #[arg(long)]
+        pre: bool,
+        /// Additional host the collector may download files from (repeatable).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
     },
 }
 
@@ -813,6 +850,47 @@ fn main() -> Result<()> {
                 );
                 for (pkg, dep) in &rep.unresolved {
                     println!("  WARNING: {pkg} depends on {dep}, which upstream does not provide");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Pypi { cmd } => match cmd {
+            PypiCmd::Sync { repo, index_url, requirements, pythons, arch, libcs, sdists, pre, allow_hosts } => {
+                let st = open(&data)?;
+                let sdists = match sdists.as_str() {
+                    "never" => mer_format_pypi::Sdists::Never,
+                    "if-no-wheel" => mer_format_pypi::Sdists::IfNoWheel,
+                    "always" => mer_format_pypi::Sdists::Always,
+                    other => bail!("--sdists must be never, if-no-wheel or always, got {other:?}"),
+                };
+                // The collector contacts the index host, the host PyPI serves
+                // files from, and whatever else was explicitly allowed.
+                let mut hosts = allow_hosts;
+                let index_host = mer_fetch::host_of(&index_url).ok_or_else(|| anyhow!("{index_url:?} is not an http(s) URL"))?;
+                if index_host == "pypi.org" {
+                    hosts.push("files.pythonhosted.org".into());
+                }
+                hosts.push(index_host);
+                let client = mer_fetch::HttpClient::new(&hosts);
+                let cfg = mer_format_pypi::PyConfig { index_url, requirements, pythons, arch, libcs, sdists, prereleases: pre };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.index_url, hosts.join(", "));
+                let rep = mer_format_pypi::sync(&st, &repo, &client, &cfg)?;
+                for (name, version) in &rep.projects {
+                    println!("  {name} {version}");
+                }
+                println!(
+                    "{} projects, {} files; downloaded {} ({}), {} already in the store",
+                    rep.projects.len(),
+                    rep.files,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused
+                );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
                 }
                 match rep.snapshot {
                     Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),

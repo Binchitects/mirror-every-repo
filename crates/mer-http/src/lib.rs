@@ -9,11 +9,14 @@
 //! - **admin**: the web panel under `/ui/` and its JSON API under `/api/`,
 //!   for signed-in users only.
 mod api;
+mod formats;
 mod packages;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_admin;
+#[cfg(test)]
+mod tests_formats;
 mod ui;
 
 use mer_auth::Auth;

@@ -1,6 +1,6 @@
 //! Collector-side sync of a Python package index into one repo snapshot.
 use crate::files::{parse_filename, safe_filename, FileKind, Targets};
-use crate::{evaluate, normalize_name, parse_requirement, Env, SpecifierSet, Version};
+use crate::{evaluate, parse_requirement, Env, SpecifierSet, Version};
 use mer_blob::Expect;
 use mer_core::{Digest, EntryRole};
 use mer_fetch::{host_of, FetchError, HttpClient};
