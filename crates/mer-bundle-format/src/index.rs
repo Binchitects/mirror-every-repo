@@ -46,13 +46,13 @@ pub fn encode_index(recs: &[IndexRec]) -> Vec<u8> {
 
 /// Decode and check that the blobs exactly fill `payload_len` bytes.
 pub fn decode_index(bytes: &[u8], payload_len: u64) -> Result<Vec<IndexRec>, FormatError> {
-    if bytes.len() % INDEX_RECORD_LEN != 0 {
+    if !bytes.len().is_multiple_of(INDEX_RECORD_LEN) {
         return Err(FormatError::Integrity("blob index length".into()));
     }
     let mut out = Vec::with_capacity(bytes.len() / INDEX_RECORD_LEN);
     let mut total = 0u64;
     let mut seen = std::collections::HashSet::new();
-    for rec in bytes.chunks_exact(INDEX_RECORD_LEN) {
+    for rec in bytes.as_chunks::<INDEX_RECORD_LEN>().0 {
         let digest = Digest::from_slice(&rec[0..32]).expect("32 bytes");
         let raw = u64::from_be_bytes(rec[32..40].try_into().unwrap());
         let stored = u64::from_be_bytes(rec[40..48].try_into().unwrap());

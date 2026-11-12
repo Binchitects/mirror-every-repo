@@ -1,0 +1,48 @@
+name: CI
+
+# Every push to main and every pull request: lint, the full test suite, and
+# an end-to-end run of both transports between two containers.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    # The same image the project is developed and released with. It carries
+    # the tools some tests call (gpg, gpgv, dpkg, apt-get, openssl, curl) and
+    # runs as root, which the real-apt test needs.
+    container: rust:1.99-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Lint (warnings are errors)
+        run: |
+          rustup component add clippy
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+
+  e2e:
+    name: End to end (media and diode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Builds the container image, starts a collector and a vault (the vault
+      # on a network with no route out), carries one bundle on "removable
+      # media" and one through the one-way UDP link, and checks every step.
+      - name: Run deploy/demo.sh
+        run: bash deploy/demo.sh
+      - name: Container logs on failure
+        if: failure()
+        run: docker compose logs --tail 200 || true

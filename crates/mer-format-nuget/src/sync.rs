@@ -162,7 +162,7 @@ impl Feed<'_> {
         let url = format!("{base}{}/index.json", id.to_ascii_lowercase());
         let Some(index) = self.json(&url)?.cloned() else { return Ok(None) };
         for page in index["items"].as_array().into_iter().flatten() {
-            let within = |key: &str, ord: std::cmp::Ordering| page[key].as_str().and_then(Version::parse).map_or(true, |b| version.cmp(&b) != ord);
+            let within = |key: &str, ord: std::cmp::Ordering| page[key].as_str().and_then(Version::parse).is_none_or(|b| version.cmp(&b) != ord);
             if !(within("lower", std::cmp::Ordering::Less) && within("upper", std::cmp::Ordering::Greater)) {
                 continue;
             }
@@ -206,7 +206,7 @@ impl Feed<'_> {
                     if v.is_prerelease() && !prerelease {
                         continue;
                     }
-                    let listed = self.entry(id, v)?.map_or(true, |e| e["listed"].as_bool() != Some(false));
+                    let listed = self.entry(id, v)?.is_none_or(|e| e["listed"].as_bool() != Some(false));
                     if listed {
                         return Ok(Ok((v.clone(), text.clone())));
                     }

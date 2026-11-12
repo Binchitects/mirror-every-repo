@@ -28,7 +28,7 @@ pub fn symbol_count(block_len: usize, t: u16) -> u32 {
 }
 
 fn check(block_len: usize, t: u16) -> Result<ObjectTransmissionInformation, FecError> {
-    if t == 0 || t % 8 != 0 {
+    if t == 0 || !t.is_multiple_of(8) {
         return Err(FecError::SymbolSize(t));
     }
     if block_len == 0 {

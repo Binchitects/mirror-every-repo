@@ -136,7 +136,7 @@ impl BlobStore for FsStore {
         };
         let size = f.metadata()?.len();
         let (off, len) = range.unwrap_or((0, size));
-        if off.checked_add(len).map_or(true, |end| end > size) {
+        if off.checked_add(len).is_none_or(|end| end > size) {
             return Err(StoreError::BadRange);
         }
         if off > 0 {

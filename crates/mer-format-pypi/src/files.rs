@@ -80,7 +80,7 @@ impl Targets {
         };
         match (family, abi) {
             // Pure Python: any Python 3 at or above the tagged minor.
-            ("py", "none") => tag_minor.map_or(true, |m| m <= minor),
+            ("py", "none") => tag_minor.is_none_or(|m| m <= minor),
             // Built for exactly this CPython.
             ("cp", abi) if tag_minor == Some(minor) => abi == format!("cp3{minor}") || abi == "abi3" || abi == "none",
             // Stable ABI or no ABI: built for an older CPython, still loadable.

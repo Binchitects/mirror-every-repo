@@ -86,7 +86,7 @@ pub fn open_descriptor(envelope: &[u8], trust: &TrustStore) -> Result<Descriptor
     }
     if desc.manifest_len == 0
         || desc.manifest_len > limits::MAX_MANIFEST_BYTES
-        || desc.manifest_len.checked_add(desc.index_len).map_or(true, |n| n > desc.stream_len)
+        || desc.manifest_len.checked_add(desc.index_len).is_none_or(|n| n > desc.stream_len)
     {
         return Err(FormatError::Integrity("descriptor lengths".into()));
     }
