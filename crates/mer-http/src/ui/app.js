@@ -231,8 +231,49 @@ function repoCard(r, s) {
       r.private ? badge("token required", "warn") : badge("open"),
       h("span", { class: "muted" }, `${bytes(r.bytes)}${r.quota_bytes ? ` of ${bytes(r.quota_bytes)}` : ""}`),
       h("span", { class: "spacer" }),
+      h("button", { class: "btn", onclick: () => clientSetupDialog(r) }, "Client setup"),
       can("admin") && h("button", { class: "btn", onclick: () => settingsDialog(r) }, "Settings")),
     table(["Snapshot", "State", { label: "Files", num: true }, { label: "Size", num: true }, "Sealed", ""], rows, "No snapshots yet."));
+}
+
+// How a client machine is pointed at this repository. The address shown is
+// the one this page was loaded from; if package clients use another listener
+// or name, substitute it.
+function clientSetupDialog(r) {
+  const origin = window.location.origin;
+  const host = window.location.host;
+  const secure = window.location.protocol === "https:";
+  const base = `${origin}/${r.name}`;
+  const blocks = [];
+  const add = (title, lines) => blocks.push(h("h3", {}, title), h("pre", { class: "snippet" }, lines.join("\n")));
+  if (r.format === "apt") {
+    add("1. Trust the site key (once per client)", [
+      `curl -o /etc/apt/keyrings/site.asc ${base}/keys/site.asc`,
+      "# or copy the file to the client by hand",
+    ]);
+    add("2. Add the source (suite and components as mirrored)", [
+      `deb [signed-by=/etc/apt/keyrings/site.asc] ${base} bookworm main`,
+    ]);
+    if (r.private) add("3. Token, in /etc/apt/auth.conf.d/vault.conf (mode 600)", [`machine ${origin} login apt password <token>`]);
+  } else if (r.format === "pypi") {
+    const trusted = secure ? "" : ` --trusted-host ${window.location.hostname}`;
+    add("One install", [`pip install --index-url ${base}/simple/${trusted} <package>`]);
+    add("Or for every install, in pip.conf", ["[global]", `index-url = ${base}/simple/`].concat(secure ? [] : [`trusted-host = ${window.location.hostname}`]));
+    if (r.private) add("Token", [`index-url = ${window.location.protocol}//token:<token>@${host}/${r.name}/simple/`]);
+  } else if (r.format === "npm") {
+    add("Point npm at the vault", [`npm config set registry ${base}/`]);
+    if (r.private) add("Token, in .npmrc", [`//${host}/${r.name}/:_authToken=<token>`]);
+  } else if (r.format === "oci") {
+    add("Pull an image", [`docker pull ${host}/${r.name}/<image>:<tag>`, `# for example: docker pull ${host}/${r.name}/library/alpine:3.20`]);
+    if (!secure) add("Plain HTTP needs to be allowed on the client (or serve with TLS)", ['# /etc/docker/daemon.json', `{ "insecure-registries": ["${host}"] }`]);
+    if (r.private) add("Token", [`docker login ${host}    # any user name, the token as password`]);
+  } else {
+    add("Download a file", [`curl -O ${base}/<path>`]);
+    if (r.private) add("Token", [`curl -H "Authorization: Bearer <token>" -O ${base}/<path>`]);
+  }
+  if (r.private) blocks.push(h("p", { class: "muted" }, "This repository requires a token. An admin creates tokens on the Access page."));
+  if (!r.live) blocks.unshift(h("div", { class: "banner warn" }, "Nothing is published in this repository yet, so clients will get 'not found' until a snapshot is published."));
+  confirmDialog(`Client setup for ${r.name}`, blocks, null, false);
 }
 
 async function reviewDialog(repo, seq) {

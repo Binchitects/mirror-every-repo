@@ -692,6 +692,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hex",
+ "libc",
  "mer-auth",
  "mer-blob",
  "mer-bundle",

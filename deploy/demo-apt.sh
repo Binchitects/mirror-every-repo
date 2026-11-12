@@ -35,7 +35,10 @@ $C cp /keys/link.key /media/link.key
 $V cp /media/link.key /keys/link.key
 $V rm /media/link.key
 $V mer key trust /data/trust.txt "$PUB"
-$C mer apt keygen --name "Demo Site Key" | head -1
+# Not "| head -1": cutting a pipe short makes the writer fail, and with
+# pipefail that fails the step whenever the timing is unlucky.
+KEYGEN=$($C mer apt keygen --name "Demo Site Key")
+echo "${KEYGEN%%$'\n'*}"
 
 step "4. collector: mirror 'hello' and its dependencies from deb.debian.org"
 $C mer repo add debian --format apt

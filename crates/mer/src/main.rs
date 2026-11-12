@@ -621,8 +621,27 @@ fn status(st: &Storage) -> Result<()> {
     Ok(())
 }
 
+/// Let the process end quietly when its output is piped into something that
+/// stops reading (`mer status | head`, a pager that is closed early).
+///
+/// Rust ignores SIGPIPE by default, which turns a closed pipe into a panic in
+/// `println!`. Restoring the default action is right for one-shot commands.
+/// It must not be done for the server: there, a client that disconnects in
+/// the middle of a download must end that one response, not the process.
+fn quiet_on_closed_pipe() {
+    #[cfg(unix)]
+    // SAFETY: called once at startup, before any other thread exists;
+    // SIGPIPE and SIG_DFL are valid arguments for signal().
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if !matches!(cli.cmd, Cmd::Serve { .. } | Cmd::Import { .. }) {
+        quiet_on_closed_pipe();
+    }
     let data = cli.data;
     match cli.cmd {
         Cmd::Init => {
