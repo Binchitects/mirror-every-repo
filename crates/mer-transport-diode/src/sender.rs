@@ -119,7 +119,9 @@ impl<O: PacketOut> Sender<O> {
         let segments: Vec<u32> = (0..params.segment_count).collect();
         for window in segments.chunks(self.cfg.interleave.max(1)) {
             // Encode every block of the window, then emit round-robin.
-            let mut lists: Vec<(u32, u32, Vec<(u32, Vec<u8>)>)> = Vec::with_capacity(window.len());
+            // (segment index, block length, symbols as (id, bytes))
+            type Encoded = (u32, u32, Vec<(u32, Vec<u8>)>);
+            let mut lists: Vec<Encoded> = Vec::with_capacity(window.len());
             for &segment in window {
                 let block = src.read_block(segment)?;
                 let enc = BlockEncoder::new(&block, t)?;
@@ -129,7 +131,7 @@ impl<O: PacketOut> Sender<O> {
                 // are 24 bits on the wire, so very late passes wrap around.
                 let span = (1u32 << 24) - 60_000 - (k + extra);
                 let start = ((pass as u64 * (k + extra) as u64) % span as u64) as u32;
-                let symbols = if pass % 2 == 0 {
+                let symbols = if pass.is_multiple_of(2) {
                     let mut s = enc.source();
                     s.extend(enc.repair(start, extra));
                     s

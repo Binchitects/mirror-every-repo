@@ -312,7 +312,7 @@ impl Auth {
         }
         // "Last used" is for the panel; one write per minute per token is enough.
         let now = now_ms();
-        if token.last_used_at.map_or(true, |t| now - t > 60_000) {
+        if token.last_used_at.is_none_or(|t| now - t > 60_000) {
             let _ = self.st.meta().write(|t| t.token_touch(token.id, now));
         }
         Some(token.name)

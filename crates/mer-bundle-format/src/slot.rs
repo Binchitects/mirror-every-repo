@@ -70,7 +70,7 @@ pub fn verify_block<'a>(
     }
     let header = block_header_len(params.depth);
     let proof: Vec<Digest> =
-        block[FIXED_HEADER..header].chunks_exact(32).map(|c| Digest::from_slice(c).unwrap()).collect();
+        block[FIXED_HEADER..header].as_chunks::<32>().0.iter().map(|c| Digest::from_slice(c).unwrap()).collect();
     let data = &block[header..];
     if !verify_proof(&desc.merkle_root, index, leaf_hash(index, data), &proof) {
         return Err(bad("Merkle proof does not match the signed root"));

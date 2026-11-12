@@ -201,7 +201,7 @@ mod tests {
         let dir = mirror();
         let base = serve(dir.path().to_path_buf());
         let host = host_of(&base).unwrap();
-        let client = HttpClient::new(&[host.clone()]);
+        let client = HttpClient::new(std::slice::from_ref(&host));
         let resp = client.get(&format!("{base}/dists/stable/Release"), &[("Accept", "text/plain")]).unwrap();
         assert_eq!(resp.status, 200);
         assert_eq!(resp.bytes("Release", 100).unwrap(), b"Suite: stable

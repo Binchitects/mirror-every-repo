@@ -45,7 +45,7 @@ impl Cursor<'_> {
         let rest = &self.s[self.i..];
         let mut best: Option<(usize, usize)> = None;
         for (idx, w) in words.iter().enumerate() {
-            if rest.starts_with(w.as_bytes()) && best.map_or(true, |(_, len)| w.len() > len) {
+            if rest.starts_with(w.as_bytes()) && best.is_none_or(|(_, len)| w.len() > len) {
                 best = Some((idx, w.len()));
             }
         }
@@ -230,7 +230,7 @@ impl Specifier {
 
     pub fn matches(&self, v: &Version) -> bool {
         if self.op == "===" {
-            return Version::parse(&self.text).map_or(false, |s| s == *v);
+            return Version::parse(&self.text).is_some_and(|s| s == *v);
         }
         if (self.op == "==" || self.op == "!=") && self.text.ends_with(".*") {
             return self.prefix_match(v) == (self.op == "==");

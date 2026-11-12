@@ -355,7 +355,7 @@ impl SealedBundle {
         let payload_len = desc.stream_len - desc.manifest_len - desc.index_len;
         let blobs = mer_bundle_format::decode_index(&index_bytes, payload_len)?;
         let leaves: Vec<Digest> = std::fs::read(dir.join("leaves.bin"))?
-            .chunks_exact(32)
+            .as_chunks::<32>().0.iter()
             .map(|c| Digest::from_slice(c).expect("32 bytes"))
             .collect();
         let tree = MerkleTree::from_leaves(leaves);

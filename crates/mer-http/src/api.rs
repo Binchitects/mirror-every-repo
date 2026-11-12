@@ -255,7 +255,7 @@ fn get(app: &App, me: &Identity, segments: &[&str], query: &str) -> ApiResult {
             app.flush_traffic();
             let (top, by_repo) = st.meta().read(|t| Ok((t.traffic_top(query_u32(query, "limit", 50, 500))?, t.traffic_by_repo()?)))?;
             let mut clients: Vec<_> = lock(&app.traffic.clients).iter().map(|(ip, c)| (*ip, *c)).collect();
-            clients.sort_by(|a, b| b.1.bytes.cmp(&a.1.bytes));
+            clients.sort_by_key(|c| std::cmp::Reverse(c.1.bytes));
             clients.truncate(50);
             Ok(json!({
                 "top": top.iter().map(|r| json!({
@@ -298,7 +298,7 @@ fn overview(app: &App) -> ApiResult {
             let pending: Vec<u64> = t
                 .snapshot_list(r.id)?
                 .iter()
-                .filter(|s| s.state == mer_meta::SnapState::Sealed && live_seq.map_or(true, |l| s.seq > l))
+                .filter(|s| s.state == mer_meta::SnapState::Sealed && live_seq.is_none_or(|l| s.seq > l))
                 .map(|s| s.seq)
                 .collect();
             repo_json.push(json!({
