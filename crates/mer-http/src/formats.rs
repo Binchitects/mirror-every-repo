@@ -369,6 +369,62 @@ fn cargo(req: &Request, tls: bool, repo: &Repo, path: &str) -> Route {
     not_found()
 }
 
+// -------------------------------------------------------------------- go
+
+/// The go command asks for `<module>/@v/list`, `<module>/@v/<version>.info`,
+/// `.mod`, `.zip` and `<module>/@latest`, which is how the files are stored.
+/// A version that is missing is a wish, named `module@version`; a module that
+/// is not mirrored at all is a wish under its own name.
+///
+/// To find which module a package belongs to, the go command also asks for
+/// every shorter path (`github.com/owner`, `github.com`). Those are not
+/// modules, and are not recorded.
+fn go(raw: &str) -> Route {
+    let not_found = || Route::Done(Reply::bytes(404, "text/plain", b"not found\n".to_vec()));
+    let Some(path) = percent_decode(raw) else { return not_found() };
+    // Upper case is written as "!" and the lower-case letter.
+    let unescape = |s: &str| {
+        let mut out = String::new();
+        let mut bang = false;
+        for c in s.chars() {
+            match (bang, c) {
+                (false, '!') => bang = true,
+                (true, c) => {
+                    out.push(c.to_ascii_uppercase());
+                    bang = false;
+                }
+                (false, c) => out.push(c),
+            }
+        }
+        out
+    };
+    let safe = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/' | b'!' | b'+'));
+    let could_be_module = |module: &str| {
+        let segments = module.split('/').count();
+        let hosted = ["github.com/", "gitlab.com/", "bitbucket.org/", "golang.org/x/"].iter().any(|h| module.starts_with(h));
+        segments >= if hosted { 3 } else { 2 } || (module.starts_with("gopkg.in/") && segments == 2)
+    };
+    let wish = |module: &str, version: Option<&str>| {
+        could_be_module(module).then(|| match version {
+            Some(v) => format!("{}@{}", unescape(module), unescape(v)),
+            None => unescape(module),
+        })
+    };
+    if let Some(module) = path.strip_suffix("/@latest") {
+        return if safe(module) { Route::Mapped { wish: wish(module, None), path } } else { not_found() };
+    }
+    let Some((module, file)) = path.split_once("/@v/") else { return not_found() };
+    if !safe(module) || !safe(file) || file.contains('/') {
+        return not_found();
+    }
+    let version = [".info", ".mod", ".zip"].iter().find_map(|ext| file.strip_suffix(ext));
+    match version {
+        Some(v) => Route::Mapped { wish: wish(module, Some(v)), path },
+        None if file == "list" => Route::Mapped { wish: wish(module, None), path },
+        None => not_found(),
+    }
+}
+
 // ------------------------------------------------------------------ helm
 
 /// A chart repository is two kinds of file: the index and chart archives.
@@ -388,6 +444,7 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "nuget" => nuget(app, req, tls, repo, path),
         "helm" => helm(path),
         "cargo" => cargo(req, tls, repo, path),
+        "go" => go(path),
         _ => Route::Unhandled,
     }
 }

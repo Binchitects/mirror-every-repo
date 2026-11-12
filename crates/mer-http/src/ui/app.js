@@ -272,6 +272,13 @@ function clientSetupDialog(r) {
       "  </packageSources>", "</configuration>",
     ]);
     if (r.private) add("Token", [`dotnet nuget add source ${base}/v3/index.json --name vault --username any --password <token> --store-password-in-clear-text${insecure}`]);
+  } else if (r.format === "go") {
+    add("Point the go command at the vault (once per client)", [
+      `go env -w GOPROXY=${base}`,
+      "go env -w GOSUMDB=off   # the collector compared every file with the checksum database",
+    ]);
+    add("Then as usual", ["go get <module>", "go build ./..."]);
+    if (r.private) add("Token, in ~/.netrc (mode 600)", [`machine ${window.location.hostname} login go password <token>`]);
   } else if (r.format === "cargo") {
     add("In .cargo/config.toml (of the project, or of the user: ~/.cargo/config.toml)", [
       "[source.crates-io]", 'replace-with = "vault"', "",

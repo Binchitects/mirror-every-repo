@@ -80,6 +80,18 @@ services:
     networks: [diode]
     profiles: [more]
 
+  goclient:
+    image: golang:1.24
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [more]
+    environment:
+      GOPROXY: http://vault:8080/go
+      # The collector compared every file with the checksum database.
+      GOSUMDB: "off"
+      GOTOOLCHAIN: local
+
 networks:
   internet: {}
   diode:

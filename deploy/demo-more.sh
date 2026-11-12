@@ -13,6 +13,7 @@ C="docker compose exec -T collector"
 V="docker compose exec -T vault"
 HELM="docker compose exec -T helmclient"
 RUST="docker compose exec -T cargoclient"
+GO="docker compose exec -T goclient"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK: %s\n' "$*"; }
 fail() { printf '  FAILED: %s\n' "$*"; exit 1; }
@@ -106,14 +107,54 @@ fn main() {
     println!("{}", serde_json::to_string(&Hello { from: "the vault" }).unwrap());
 }
 RS
-OUT=$($RUST sh -c 'cd /tmp/app && cargo run 2>&1' | tr -d '')
+OUT=$($RUST sh -c 'cd /tmp/app && cargo run 2>&1' | tr -d '
+')
 echo "$OUT" | grep -E 'Downloaded [0-9]+ crates|Finished' | sed 's/^/  | /'
 case "$OUT" in *'{"from":"the vault"}'*) ok "resolved, downloaded, compiled (with a derive macro) and ran from the vault" ;; *) echo "$OUT" | tail -15; fail "the program did not run" ;; esac
-LOCKED=$($RUST sh -c 'grep -c "^checksum = " /tmp/app/Cargo.lock' | tr -d '')
+LOCKED=$($RUST sh -c 'grep -c "^checksum = " /tmp/app/Cargo.lock' | tr -d '
+')
 ok "$LOCKED crates in Cargo.lock, each checked by cargo against the checksum in the index"
 if $RUST sh -c 'cd /tmp/app && cargo add rand' >/dev/null 2>&1; then fail "rand was usable although it is not mirrored"
 else ok "a crate that is not mirrored cannot be added"; fi
 case "$($V mer wishlist)" in *"crates  rand"*) ok "the request for rand is on the wishlist" ;; *) $V mer wishlist; fail "rand is not on the wishlist" ;; esac
+
+step "9. Go: mirror 'github.com/gin-gonic/gin' v1.10.0 from proxy.golang.org, checked against sum.golang.org"
+$C mer repo add go --format go
+$C mer go sync go -m github.com/gin-gonic/gin@v1.10.0
+carry
+
+step "10. Go: get, build and run with a stock go that can only reach the vault"
+$GO timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "go client can reach the internet" || ok "go client cannot reach the internet"
+$GO sh -c 'mkdir -p /tmp/app && cd /tmp/app && go mod init app >/dev/null 2>&1'
+$GO sh -c 'cat > /tmp/app/main.go' <<'GOSRC'
+package main
+
+import (
+	"fmt"
+	"net/http/httptest"
+
+	"github.com/gin-gonic/gin"
+)
+
+func main() {
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.GET("/hello", func(c *gin.Context) { c.JSON(200, gin.H{"from": "the vault"}) })
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/hello", nil))
+	fmt.Println(w.Body.String(), gin.Version)
+}
+GOSRC
+$GO sh -c 'cd /tmp/app && go get github.com/gin-gonic/gin@v1.10.0 2>&1' | tail -3 | sed 's/^/  | /'
+OUT=$($GO sh -c 'cd /tmp/app && go run . 2>&1' | tr -d '')
+case "$OUT" in '{"from":"the vault"} v1.10.0') ok "gin was fetched from the vault, compiled and ran: $OUT" ;; *) echo "$OUT" | tail -15; fail "the program did not run" ;; esac
+SUMS=$($GO sh -c 'grep -c "" /tmp/app/go.sum' | tr -d '')
+ok "$SUMS lines in go.sum"
+OUT=$($GO sh -c 'cd /tmp/app && go mod verify 2>&1' | tr -d '')
+case "$OUT" in "all modules verified") ok "go mod verify: $OUT" ;; *) echo "$OUT"; fail "go mod verify failed" ;; esac
+if $GO sh -c 'cd /tmp/app && go get github.com/google/uuid' >/dev/null 2>&1; then fail "uuid was usable although it is not mirrored"
+else ok "a module that is not mirrored cannot be fetched"; fi
+case "$($V mer wishlist)" in *"github.com/google/uuid"*) ok "the request for github.com/google/uuid is on the wishlist" ;; *) $V mer wishlist; fail "uuid is not on the wishlist" ;; esac
 
 step "vault: state and integrity"
 $V mer status
