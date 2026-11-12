@@ -1,0 +1,53 @@
+# Two-node demo. Run it with: bash deploy/demo.sh
+#
+#   collector  has the "internet" network and the diode link
+#   vault      has ONLY the diode link (internal network: no route out)
+#   media      a shared volume standing in for a USB stick carried by hand
+#
+# A real data diode is hardware that physically cannot send back. The
+# "diode" network here is an ordinary internal network; the software simply
+# never sends anything from the vault side.
+name: mer-demo
+
+services:
+  collector:
+    build: .
+    image: mer:dev
+    entrypoint: ["sleep", "infinity"]
+    networks: [internet, diode]
+    volumes:
+      - collector-data:/data
+      - collector-keys:/keys
+      - media:/media
+
+  vault:
+    image: mer:dev
+    depends_on: [collector]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    volumes:
+      - vault-data:/data
+      - vault-keys:/keys
+      - media:/media
+
+  # A stock Debian machine inside the air gap, used by deploy/demo-apt.sh.
+  # It can reach the vault and nothing else.
+  client:
+    image: debian:bookworm-slim
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    volumes:
+      - media:/media:ro
+
+networks:
+  internet: {}
+  diode:
+    internal: true
+
+volumes:
+  collector-data: {}
+  collector-keys: {}
+  vault-data: {}
+  vault-keys: {}
+  media: {}

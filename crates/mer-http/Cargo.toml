@@ -1,0 +1,19 @@
+[package]
+name = "mer-http"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-blob.workspace = true
+mer-meta.workspace = true
+mer-storage.workspace = true
+mer-auth.workspace = true
+tiny_http.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+ureq.workspace = true

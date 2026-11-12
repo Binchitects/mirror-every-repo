@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+mer-core = { path = "crates/mer-core" }
+mer-crypto = { path = "crates/mer-crypto" }
+mer-fec = { path = "crates/mer-fec" }
+mer-blob = { path = "crates/mer-blob" }
+mer-meta = { path = "crates/mer-meta" }
+mer-bundle-format = { path = "crates/mer-bundle-format" }
+mer-storage = { path = "crates/mer-storage" }
+mer-transport-media = { path = "crates/mer-transport-media" }
+mer-transport-diode = { path = "crates/mer-transport-diode" }
+mer-bundle = { path = "crates/mer-bundle" }
+mer-fetch = { path = "crates/mer-fetch" }
+mer-format-apt = { path = "crates/mer-format-apt" }
+mer-http = { path = "crates/mer-http" }
+mer-auth = { path = "crates/mer-auth" }
+
+argon2 = "0.5"
+serde_json = "1"
+base64 = "0.22"
+
+ureq = "2"
+tiny_http = { version = "0.12", features = ["ssl-rustls"] }
+flate2 = "1"
+
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+thiserror = "1"
+ciborium = "0.2"
+crc32c = "0.6"
+rusqlite = { version = "0.32", features = ["bundled"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+raptorq = "2"
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+tempfile = "3"

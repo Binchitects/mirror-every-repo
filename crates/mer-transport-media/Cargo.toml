@@ -1,0 +1,17 @@
+[package]
+name = "mer-transport-media"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-bundle-format.workspace = true
+crc32c.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+mer-bundle.workspace = true
+mer-storage.workspace = true
+mer-crypto.workspace = true
+tempfile.workspace = true

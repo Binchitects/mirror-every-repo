@@ -1,0 +1,14 @@
+[package]
+name = "mer-format-apt"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-blob.workspace = true
+mer-meta.workspace = true
+mer-storage.workspace = true
+mer-fetch.workspace = true
+flate2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "mer-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true

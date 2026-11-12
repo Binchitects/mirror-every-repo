@@ -1,0 +1,8 @@
+[package]
+name = "mer-fec"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+raptorq.workspace = true
+thiserror.workspace = true
