@@ -333,6 +333,42 @@ fn oci(app: &App, repo: &Repo, path: &str) -> Route {
     }
 }
 
+// ----------------------------------------------------------------- cargo
+
+fn cargo_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+}
+
+/// Cargo starts at `index/config.json`, which tells it where crate files
+/// are. That address must be absolute, so the file is written here from the
+/// address the client used. Then it reads one index file per crate.
+fn cargo(req: &Request, tls: bool, repo: &Repo, path: &str) -> Route {
+    let not_found = || Route::Done(Reply::json(404, json!({ "error": "not found" })));
+    if path == "index/config.json" {
+        let Some(base) = own_base(req, tls, repo) else {
+            return Route::Done(Reply::json(400, json!({ "error": "a Host header is required" })));
+        };
+        let mut config = json!({ "dl": format!("{base}crates/{{crate}}/{{crate}}-{{version}}.crate") });
+        if repo.private {
+            config["auth-required"] = json!(true);
+        }
+        return Route::Done(Reply::json(200, config));
+    }
+    if let Some(rest) = path.strip_prefix("index/") {
+        // An index file that is missing is a crate somebody wants.
+        return match rest.rsplit('/').next() {
+            Some(name) if cargo_name(name) && rest.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'/')) => {
+                Route::Mapped { path: path.to_ascii_lowercase(), wish: Some(name.to_ascii_lowercase()) }
+            }
+            _ => not_found(),
+        };
+    }
+    if path.starts_with("crates/") && path.ends_with(".crate") {
+        return Route::Mapped { path: path.to_string(), wish: None };
+    }
+    not_found()
+}
+
 // ------------------------------------------------------------------ helm
 
 /// A chart repository is two kinds of file: the index and chart archives.
@@ -351,6 +387,7 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "oci" => oci(app, repo, path),
         "nuget" => nuget(app, req, tls, repo, path),
         "helm" => helm(path),
+        "cargo" => cargo(req, tls, repo, path),
         _ => Route::Unhandled,
     }
 }

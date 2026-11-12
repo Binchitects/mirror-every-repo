@@ -93,6 +93,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: HelmCmd,
     },
+    /// Cargo registries for Rust (collector side).
+    Cargo {
+        #[command(subcommand)]
+        cmd: CargoCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -265,6 +270,37 @@ enum HelmCmd {
         pre: bool,
         /// Additional host the collector may contact (repeatable), if the
         /// repository keeps its chart archives on another host.
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum CargoCmd {
+    /// Mirror crates and their dependencies into a new snapshot of a cargo repo.
+    Sync {
+        repo: String,
+        /// Sparse index of the upstream registry.
+        #[arg(long, default_value = "https://index.crates.io")]
+        index: String,
+        /// What to mirror (repeatable), written as in Cargo.toml: serde
+        /// (newest stable), tokio@1.38 (1.38 or compatible), "rand@=0.8.5".
+        #[arg(long = "crate", short = 'p')]
+        crates: Vec<String>,
+        /// A Cargo.lock whose exact versions are mirrored too (repeatable),
+        /// so that `cargo build --locked` works inside the air gap.
+        #[arg(long = "lockfile")]
+        lockfiles: Vec<PathBuf>,
+        /// Named crates are mirrored with every feature switched on, so that
+        /// any build can be served. With this, only their default features
+        /// (and those given with --feature) are followed.
+        #[arg(long)]
+        default_features_only: bool,
+        /// A feature of a named crate to follow (repeatable): tokio/full.
+        #[arg(long = "feature", short = 'F')]
+        features: Vec<String>,
+        /// Additional host the collector may contact (repeatable), if the
+        /// registry keeps crate files on another host.
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
@@ -1127,6 +1163,43 @@ fn main() -> Result<()> {
                     println!("  {name} {version}");
                 }
                 println!("{} charts; downloaded {} ({}), {} already in the store", rep.charts.len(), rep.downloaded, human(rep.downloaded_bytes), rep.reused);
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Cargo { cmd } => match cmd {
+            CargoCmd::Sync { repo, index, crates, lockfiles, default_features_only, features, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                let index_host = mer_fetch::host_of(&index).ok_or_else(|| anyhow!("{index:?} is not an http(s) URL"))?;
+                if index_host == "index.crates.io" {
+                    hosts.push("static.crates.io".into()); // where crates.io keeps the crate files
+                }
+                hosts.push(index_host);
+                let mut pins = Vec::new();
+                for path in &lockfiles {
+                    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+                    let found = mer_format_cargo::parse_lockfile(&text);
+                    println!("{}: {} registry packages", path.display(), found.len());
+                    pins.extend(found);
+                }
+                let client = mer_fetch::HttpClient::new(&hosts);
+                let cfg = mer_format_cargo::CargoConfig { index_url: index, crates, pins, default_features_only, features };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.index_url, hosts.join(", "));
+                let rep = mer_format_cargo::sync(&st, &repo, &client, &cfg)?;
+                println!(
+                    "{} crates, {} versions; downloaded {} ({}), {} already in the store",
+                    rep.crates,
+                    rep.versions,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused
+                );
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");
                 }

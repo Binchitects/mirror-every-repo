@@ -723,6 +723,7 @@ dependencies = [
  "mer-crypto",
  "mer-fetch",
  "mer-format-apt",
+ "mer-format-cargo",
  "mer-format-helm",
  "mer-format-npm",
  "mer-format-nuget",
@@ -840,6 +841,22 @@ dependencies = [
  "mer-storage",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "mer-format-cargo"
+version = "1.0.0"
+dependencies = [
+ "mer-blob",
+ "mer-core",
+ "mer-fetch",
+ "mer-meta",
+ "mer-storage",
+ "semver",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tiny_http",
 ]
 
 [[package]]

@@ -385,3 +385,26 @@ fn helm_repositories_serve_the_index_and_charts_and_record_missing_charts() {
     }
     assert_eq!(wishes(&r), vec![("charts/web-2.0.0".to_string(), 1)]);
 }
+
+#[test]
+fn cargo_registries_describe_themselves_and_record_missing_crates() {
+    let r = rig("crates", "cargo", &[("index/se/rd/serde", b"{\"name\":\"serde\"}\n"), ("crates/serde/serde-1.0.0.crate", b"crate")]);
+    let (status, body, _, _) = get(&r, "/crates/index/config.json");
+    let config: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(config["dl"], format!("{}/crates/crates/{{crate}}/{{crate}}-{{version}}.crate", r.base));
+    assert!(config.get("auth-required").is_none());
+    assert_eq!(get(&r, "/crates/index/se/rd/serde").1, "{\"name\":\"serde\"}\n");
+    assert_eq!(get(&r, "/crates/crates/serde/serde-1.0.0.crate").1, "crate");
+    assert_eq!(get(&r, "/crates/index/to/ki/tokio").0, 404);
+    assert_eq!(get(&r, "/crates/index/TO/KI/Tokio").0, 404);
+    for path in ["/crates/crates/serde/serde-9.0.0.crate", "/crates/index/..%2f..%2fmeta.db", "/crates/index/a/b.c", "/crates/api/v1/crates", "/crates/"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![("tokio".to_string(), 2)]);
+
+    // A private registry says so, which makes cargo send its token.
+    let id = r.st.repo("crates").unwrap().id;
+    r.st.meta().write(|t| t.repo_set_private(id, true)).unwrap();
+    assert_eq!(get(&r, "/crates/index/config.json").0, 401);
+}
