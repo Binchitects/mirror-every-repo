@@ -65,13 +65,19 @@ pub(crate) fn package_of(format: &str, path: &str) -> Option<(String, String)> {
             own(name, &format!("{version}-{release}"))
         }
         "maven" => {
-            // com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.pom: one entry per POM.
+            // com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.pom, ...-sources.jar:
+            // every file of a version but checksums, signatures and metadata.
             let parts: Vec<&str> = path.split('/').collect();
             let n = parts.len();
-            if n < 4 || parts[n - 1] != format!("{}-{}.pom", parts[n - 3], parts[n - 2]) {
+            if n < 4 {
                 return None;
             }
-            own(&format!("{}:{}", parts[..n - 3].join("."), parts[n - 3]), parts[n - 2])
+            let (artifact, version, file) = (parts[n - 3], parts[n - 2], parts[n - 1]);
+            let bookkeeping = [".sha1", ".sha256", ".sha512", ".md5", ".asc"].iter().any(|e| file.ends_with(e));
+            if bookkeeping || !file.starts_with(&format!("{artifact}-{version}")) {
+                return None;
+            }
+            own(&format!("{}:{artifact}", parts[..n - 3].join(".")), version)
         }
         "cargo" => {
             // crates/serde/serde-1.0.200.crate
@@ -167,7 +173,8 @@ mod tests {
             ("rpm", "Packages/g/glibc-gconv-extra-2.34-100.el9.x86_64.rpm", Some(("glibc-gconv-extra", "2.34-100.el9"))),
             ("rpm", "repodata/repomd.xml", None),
             ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.pom", Some(("com.google.guava:guava", "33.3.1-jre"))),
-            ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar", None),
+            ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar", Some(("com.google.guava:guava", "33.3.1-jre"))),
+            ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar.sha1", None),
             ("maven", "com/google/guava/guava/maven-metadata.xml", None),
             ("raw", "tools/a.txt", None),
         ];

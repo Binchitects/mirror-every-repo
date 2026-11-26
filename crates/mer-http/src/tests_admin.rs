@@ -818,3 +818,44 @@ fn wishes_say_what_to_add_and_can_be_dismissed_cleared_and_exported() {
     let actions: Vec<&str> = audit["rows"].as_array().unwrap().iter().filter_map(|a| a["action"].as_str()).filter(|a| a.starts_with("wishlist.")).collect();
     assert_eq!(actions.len(), 3, "each change to the wishlist is in the audit log");
 }
+
+/// A miss through each format's real client route lands on the wishlist with
+/// what to add on the collector, in the words of the Jobs tab's source form.
+#[test]
+fn every_format_turns_a_real_miss_into_what_to_add() {
+    let r = rig();
+    let cases = [
+        ("py", "pypi", "/py/simple/django/", "--requirement=django"),
+        ("js", "npm", "/js/left-pad", "--package=left-pad"),
+        ("js", "npm", "/js/left-pad/-/left-pad-1.3.0.tgz", "--package=left-pad@1.3.0"),
+        ("net", "nuget", "/net/flat/dapper/index.json", "--package=dapper"),
+        ("net", "nuget", "/net/flat/dapper/2.1.35/dapper.2.1.35.nupkg", "--package=dapper@2.1.35"),
+        ("rust", "cargo", "/rust/ra/nd/rand", "--crate=rand"),
+        ("rust", "cargo", "/rust/crates/rand/rand-0.8.5.crate", "--crate=rand@=0.8.5"),
+        ("gomods", "go", "/gomods/github.com/google/uuid/@v/list", "--module=github.com/google/uuid"),
+        ("gomods", "go", "/gomods/github.com/!burnt!sushi/toml/@v/v1.4.0.zip", "--module=github.com/BurntSushi/toml@v1.4.0"),
+        ("charts", "helm", "/charts/charts/cert-manager-v1.16.1.tgz", "--chart=cert-manager@v1.16.1"),
+        ("el9", "rpm", "/el9/Packages/h/htop-3.3.0-1.el9.x86_64.rpm", "--package=htop"),
+        ("m2", "maven", "/m2/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar", "--artifact=org.slf4j:slf4j-api:2.0.16"),
+        ("img", "oci", "/v2/img/library/busybox/manifests/1.37", "--image=library/busybox:1.37"),
+        ("deb", "apt", "/deb/pool/main/h/htop/htop_3.2.2-2_amd64.deb", "--package=htop"),
+    ];
+    for (repo, format, _, _) in cases {
+        if r.st.meta().read(|t| t.repo_get(repo)).unwrap().is_none() {
+            r.st.create_repo(repo, format).unwrap();
+            let s = snapshot(&r.st, repo, &[("placeholder", b"x")]);
+            r.st.decide(repo, s, true, "test").unwrap();
+            r.st.publish(repo, s, "test").unwrap();
+        }
+    }
+    let pkg = Client::new(&r);
+    for (_, format, url, _) in cases {
+        let status = pkg.get(url).status;
+        assert!(status == 404 || status == 401, "{format} {url}: {status}");
+    }
+    let wishes = Client::login(&r, "vic").get("/api/wishlist?limit=100").json;
+    let hints: Vec<(String, String)> = wishes.as_array().unwrap().iter().map(|w| (w["repo"].as_str().unwrap().to_string(), w["hint"].as_str().unwrap_or("").to_string())).collect();
+    for (repo, format, url, want) in cases {
+        assert!(hints.contains(&(repo.to_string(), want.to_string())), "{format} {url}: no wish with {want} in {hints:?}");
+    }
+}
