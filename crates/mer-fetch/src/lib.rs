@@ -432,6 +432,48 @@ mod tests {
         assert_eq!(client.get_bytes(&format!("http://{addr}/f"), &[], 100).unwrap(), b"0123456789");
     }
 
+    /// A server that breaks the body off after `cut` bytes on the first request,
+    /// and honours `Range` when `ranges` is set.
+    fn breaking_server(body: &'static [u8], cut: usize, ranges: bool) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for (n, conn) in listener.incoming().flatten().enumerate() {
+                let mut reader = BufReader::new(conn.try_clone().unwrap());
+                let (mut line, mut from) = (String::new(), 0usize);
+                while reader.read_line(&mut line).is_ok_and(|k| k > 2) {
+                    if let Some(r) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        from = r.trim().trim_end_matches('-').parse().unwrap_or(0);
+                    }
+                    line.clear();
+                }
+                let mut w = conn;
+                if ranges && from > 0 {
+                    let rest = &body[from..];
+                    let _ = write!(w, "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {from}-{}/{}\r\nConnection: close\r\n\r\n", rest.len(), body.len() - 1, body.len());
+                    let _ = w.write_all(rest);
+                } else {
+                    let _ = write!(w, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = w.write_all(if n == 0 { &body[..cut] } else { body });
+                }
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[test]
+    fn a_stream_that_breaks_off_resumes_with_or_without_range_support() {
+        let body: &'static [u8] = b"the quick brown fox jumps over the lazy dog";
+        for ranges in [true, false] {
+            let base = breaking_server(body, 10, ranges);
+            let client = HttpClient::new(&[host_of(&base).unwrap()]).without_retry_delay();
+            let mut got = Vec::new();
+            client.get(&format!("{base}/f"), &[]).unwrap().into_reader().read_to_end(&mut got).unwrap();
+            assert_eq!(got, body, "ranges: {ranges}");
+        }
+    }
+
     #[test]
     fn spec_selects_the_kind() {
         let dir = mirror();

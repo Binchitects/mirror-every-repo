@@ -2,7 +2,7 @@
 //! to a host on its allowlist, and that includes every redirect it follows.
 use crate::FetchError;
 use std::io::Read;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Redirects followed for one request, as browsers and curl allow.
 const MAX_REDIRECTS: usize = 5;
@@ -36,6 +36,7 @@ pub(crate) fn resolve(base: &str, location: &str) -> Option<String> {
     Some(target.split('#').next()?.to_string())
 }
 
+#[derive(Clone)]
 pub struct HttpClient {
     direct: ureq::Agent,
     /// Agents through the configured proxies, for https and http URLs.
@@ -274,12 +275,104 @@ impl HttpClient {
     }
 
     /// GET that must succeed: 404 and other error statuses become errors.
+    ///
+    /// The body resumes by itself: when it breaks off, or stalls (less than
+    /// 16 KiB in 30 seconds), the rest is requested again with a `Range`
+    /// header, or the start is skipped when the server ignores ranges.
+    /// Callers verify content by hash, so a resumed body is checked like any.
     pub fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse, FetchError> {
-        let resp = self.get_any(url, headers)?;
+        let mut resp = self.get_any(url, headers)?;
         match resp.status {
-            200..=299 => Ok(resp),
+            200..=299 => {
+                let inner = std::mem::replace(&mut resp.body, Box::new(std::io::empty()));
+                resp.body = Box::new(Resuming {
+                    client: self.clone(),
+                    url: url.to_string(),
+                    headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                    inner,
+                    offset: 0,
+                    resumes: 0,
+                    window: (Instant::now(), 0),
+                });
+                Ok(resp)
+            }
             404 => Err(FetchError::NotFound(url.into())),
             status => Err(FetchError::Http { path: url.into(), status }),
+        }
+    }
+}
+
+/// How slow a body may be before it counts as stalled.
+const STALL_WINDOW: Duration = Duration::from_secs(30);
+const STALL_BYTES: u64 = 16 << 10;
+
+/// A response body that picks up where it broke off.
+struct Resuming {
+    client: HttpClient,
+    url: String,
+    headers: Vec<(String, String)>,
+    inner: Box<dyn Read + Send>,
+    offset: u64,
+    resumes: usize,
+    /// Start of the current measuring window and bytes read in it.
+    window: (Instant, u64),
+}
+
+impl Resuming {
+    fn resume(&mut self, why: std::io::Error) -> std::io::Result<()> {
+        if self.resumes >= RETRY_DELAYS_MS.len() {
+            return Err(why);
+        }
+        std::thread::sleep(Duration::from_millis(self.client.retry_scale * RETRY_DELAYS_MS[self.resumes]));
+        self.resumes += 1;
+        let range = format!("bytes={}-", self.offset);
+        let mut headers: Vec<(&str, &str)> = self.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        headers.push(("Range", &range));
+        let resp = self.client.get_any(&self.url, &headers).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut body = resp.body;
+        match resp.status {
+            206 => {
+                let start = resp.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-range")).and_then(|(_, v)| v.strip_prefix("bytes ")?.split('-').next()?.parse::<u64>().ok());
+                if start != Some(self.offset) {
+                    return Err(std::io::Error::other(format!("{}: the server resumed at the wrong place", self.url)));
+                }
+            }
+            // No range support: read past what we already have.
+            200 => {
+                let skipped = std::io::copy(&mut (&mut body).take(self.offset), &mut std::io::sink())?;
+                if skipped != self.offset {
+                    return Err(std::io::Error::other(format!("{}: the body is shorter on the second try", self.url)));
+                }
+            }
+            s => return Err(std::io::Error::other(format!("{}: answered HTTP {s} when resuming", self.url))),
+        }
+        self.inner = body;
+        self.window = (Instant::now(), 0);
+        Ok(())
+    }
+}
+
+impl Read for Resuming {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            match self.inner.read(buf) {
+                Ok(n) => {
+                    self.offset += n as u64;
+                    self.window.1 += n as u64;
+                    if self.window.0.elapsed() >= STALL_WINDOW {
+                        if self.window.1 < STALL_BYTES && n > 0 {
+                            let stalled = std::io::Error::new(std::io::ErrorKind::TimedOut, "stalled");
+                            // What was read stays read; continue from after it.
+                            self.resume(stalled)?;
+                            return Ok(n);
+                        }
+                        self.window = (Instant::now(), 0);
+                    }
+                    return Ok(n);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => self.resume(e)?,
+            }
         }
     }
 }
