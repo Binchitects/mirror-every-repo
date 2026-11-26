@@ -43,10 +43,10 @@ Version and range logic is checked against the reference implementations: apt ve
 
 `mer serve` offers the panel at `/ui/`. It is three static files compiled into the binary and loads nothing from anywhere else.
 
-- Overview: repositories, store size, snapshots awaiting review, repositories that are stuck and why.
-- Repositories: snapshots with a review of what publishing or rolling back would change, then approve, reject, publish, roll back; per-repo token requirement and size limit.
+- Overview: repositories, store size, snapshots awaiting review, repositories that are stuck and why, repositories whose content is older than their limit; charts of downloads, data sent, missing items and storage over 24 hours to a year.
+- Repositories: contents as packages or files, with search; snapshots with a review of what publishing or rolling back would change (by package, then by file), then approve, reject, publish, roll back; per-repo token requirement, size limit and age limit.
 - Transfers: imported bundles and how far each repository has been applied.
-- Wishlist, Traffic (per repository, per file, per client), Audit log with its integrity check.
+- Wishlist with what to add on the collector for each item, as text to download; dismiss and clear. Traffic (charts, per repository, per file, per client), Audit log with its integrity check.
 - Access: users and roles, client tokens, own password.
 - Jobs (with `mer serve --jobs`): repositories and their sources, sync, seal, export to disk, import from disk, with live job logs and cancel. Jobs run `mer` itself, one at a time; files are confined to the `--files` directory; editing sources is for admins, running jobs for operators, and both are audited.
 

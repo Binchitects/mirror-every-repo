@@ -332,7 +332,7 @@ Bundles do not have to arrive in order. If bundle 7 never arrives and bundle 8 d
 
 ## Review, approve, publish
 
-Imported snapshots are sealed but not visible to clients. In the web panel, the Overview lists what is waiting; "Review changes" shows what publishing would add, change and remove; then approve and publish. From the command line:
+Imported snapshots are sealed but not visible to clients. In the web panel, the Overview lists what is waiting; "Review changes" shows what publishing would add, update and remove, package by package and then file by file; then approve and publish. "Browse" on the Repositories page lists what a snapshot holds, as packages with their versions or as files, with search. From the command line:
 
 ```text
 mer status                    # repos, snapshots, bundles
@@ -440,7 +440,18 @@ mer audit                        # recent audit entries, and a check of the whol
 mer fsck --deep                  # re-hash every stored file against its digest
 ```
 
-**Wishlist.** Requests for packages, projects or images that are not mirrored are counted. Use the list to decide what to add to the next sync. (apt clients do not ask the server for packages missing from the index, so apt wishes do not appear.)
+**Wishlist.** Requests for packages, projects or images that are not mirrored are counted. Use the list to decide what to add to the next sync: the panel's Wishlist page shows, for each item, what to add on the collector (for example `--requirement=django`), in the same words as the repository's source in the Jobs tab and the sync command. "Download as text" gives the whole list as a file to carry across. (apt clients do not ask the server for packages missing from the index, so apt wishes do not appear.)
+
+**Dashboards.** The Overview and Traffic pages chart downloads, data sent, requests for missing items and storage over 24 hours, 7 days, 30 days or a year. The values are kept per hour in the database.
+
+**Freshness.** Each repository shows how old its published content is. Give it a limit, and it is reported as out of date once what is published is older:
+
+```text
+mer repo stale debian 14         # report debian when its content is more than 14 days old
+mer repo stale debian off
+```
+
+The same setting is under "Settings" on the Repositories page.
 
 **Space.** Content stays as long as a retained snapshot refers to it.
 

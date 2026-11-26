@@ -2,6 +2,20 @@
 
 All notable changes to this project are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Web panel
+
+- **Dashboards**: the Overview and Traffic pages chart downloads, data sent, requests for missing items and storage used over 24 hours, 7 days, 30 days or a year, with a hover readout, keyboard access and a table view. Values are kept per hour in the database.
+- **Content age**: each repository shows how old its published content is, and can be given an age limit (panel setting or `mer repo stale`) after which it is reported as out of date.
+- **Browse and search** a repository's contents as packages with their versions, or as files.
+- **Review by package**: the review of a snapshot lists packages added, updated and removed before the files.
+- **Wishlist actions**: each item says what to add on the collector, in the words of the Jobs tab's source form and the sync command (`--requirement=django`, `--crate=rand`, `--artifact=g:a:v`, ...). The list downloads as text; operators can dismiss items or clear it.
+
+### Upgrading
+
+The database schema moves to version 4 on first start.
+
 ## [1.2.0] - 2026-11-26
 
 ### Formats
