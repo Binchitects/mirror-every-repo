@@ -193,7 +193,7 @@ Only apt has an upstream signature that is checked. PyPI attestations, npm regis
 This is a 1.0 of a focused tool, not a replacement for every feature of a general repository manager. The main limits:
 
 - Clients can read, not publish. There is no upload path from inside the air gap.
-- Sign-in is local users with three roles. There is no LDAP, Active Directory or OIDC yet.
+- Sign-in is local users and LDAP directories (OpenLDAP, Active Directory, FreeIPA), with three roles. There is no OIDC or SAML yet.
 - Dependency selection follows each ecosystem's rules but is not a full solver. What cannot be satisfied is reported and left out.
 - Mirroring, sealing and importing are command-line operations. The web panel reviews, decides and reports.
 - The wishlist is shown on the vault. Carrying it back to the collector is a manual step.

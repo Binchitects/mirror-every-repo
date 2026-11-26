@@ -14,9 +14,11 @@ All notable changes to this project are recorded here. Versions follow [Semantic
 
 - **Schedules** in the Jobs tab: sync chosen repositories (or every one with a source) daily at a UTC time on chosen days, or every few hours, then seal a bundle of what changed. Runs that came due while the server was down happen once when it is back; a sync still waiting is not queued twice; "Run now" runs a schedule straight away. Scheduled jobs are audited as `schedule <n>`.
 
+- **LDAP sign-in**: people sign in to the panel with their directory account (OpenLDAP, Active Directory, FreeIPA), and groups decide their role. Local users are checked first and keep working when the directory is down. Settings go in `/etc/mer/ldap.env` with the installer, or are `mer serve --ldap-*` options; `--ldap-ca-file` trusts a company CA for the directory only.
+
 ### Upgrading
 
-The database schema moves to version 5 on first start.
+The database schema moves to version 5 on first start. The binary is about 1.3 MB larger, from the LDAP client.
 
 ## [1.2.0] - 2026-11-26
 

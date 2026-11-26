@@ -164,6 +164,34 @@ MER init >/dev/null
 # imports, lockfiles), and where command-line exports go too.
 install -d -m 750 -o mer -g mer "$DATA/files"
 say "installed $INSTALLED in $LIB, data in $DATA"
+# Sign-in through a company directory: settings the services read, kept
+# across upgrades (the installer never rewrites this file).
+if [ ! -f "$CONF/ldap.env" ]; then
+  cat > "$CONF/ldap.env" <<'LDAPEOF'
+# Sign-in to the web panel through an LDAP directory (Active Directory,
+# OpenLDAP, FreeIPA). Local users such as admin keep working and are checked
+# first. Uncomment and fill in, then restart the service:
+#   sudo systemctl restart mer-vault     (or mer-panel on a collector)
+# Groups map to roles; a user in none of them cannot sign in.
+#MER_LDAP_URL=ldaps://dc1.example.org:636
+# For an ldap:// URL, upgrade to TLS before anything is sent:
+#MER_LDAP_STARTTLS=true
+# The CA that signed the directory's certificate (PEM), if it is a company CA:
+#MER_LDAP_CA_FILE=/etc/mer/ldap-ca.pem
+# The account that looks users up, and a file (mode 640, group mer) with its password:
+#MER_LDAP_BIND_DN=cn=mirror,ou=service,dc=example,dc=org
+#MER_LDAP_BIND_PASSWORD_FILE=/etc/mer/ldap-bind-password
+#MER_LDAP_USER_BASE=ou=people,dc=example,dc=org
+# How a user is found. Active Directory: (sAMAccountName={user})
+#MER_LDAP_USER_FILTER=(uid={user})
+# Where groups are; without it, the memberOf attribute of the user is read:
+#MER_LDAP_GROUP_BASE=ou=groups,dc=example,dc=org
+#MER_LDAP_ADMIN_GROUP=mirror-admins
+#MER_LDAP_OPERATOR_GROUP=mirror-operators
+#MER_LDAP_VIEWER_GROUP=mirror-viewers
+LDAPEOF
+  chgrp mer "$CONF/ldap.env" && chmod 640 "$CONF/ldap.env"
+fi
 
 # The first administrator of the web panel, with a generated password.
 first_admin() {
@@ -225,6 +253,7 @@ Wants=network-online.target
 User=mer
 Group=mer
 Environment=MER_DATA=$DATA
+EnvironmentFile=-$CONF/ldap.env
 ExecStart=$LIB/mer ${SERVE[*]}
 Restart=on-failure
 RestartSec=2
@@ -326,6 +355,7 @@ Wants=network-online.target
 User=mer
 Group=mer
 Environment=MER_DATA=$DATA
+EnvironmentFile=-$CONF/ldap.env
 ExecStart=$LIB/mer serve --listen $PANEL --jobs --files $DATA/files --bundle-key $DATA/keys/bundle.key --apt-gnupghome $DATA/keys/gnupg --quiet
 Restart=on-failure
 RestartSec=2

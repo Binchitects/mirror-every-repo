@@ -81,8 +81,8 @@ Upstream signatures are checked for apt and, when a key is given, for RPM reposi
 
 ## Simpler than the design, on purpose
 
-- All APIs are synchronous (no tokio). The HTTP server is a small thread-per-worker server, and every request does one database lookup under a single lock. Fine for tens of clients, not tuned for hundreds.
-- Sign-in is local users only: no LDAP/AD and no OIDC. Permissions are three global roles, not per repository or path.
+- All APIs are synchronous. The one exception is inside the LDAP client library (`ldap3`), which runs a small tokio runtime of its own for each sign-in; nothing else uses tokio. The HTTP server is a small thread-per-worker server, and every request does one database lookup under a single lock. Fine for tens of clients, not tuned for hundreds.
+- Sign-in is local users, and LDAP directories (OpenLDAP, Active Directory, FreeIPA) with groups mapped to roles; no OIDC or SAML. A directory group with a semicolon in its name cannot be given through the settings file (use the command line). Permissions are three global roles, not per repository or path.
 - Client tokens grant read access to one repository or to all; there are no upload or per-path scopes.
 - Request counters on the overview and the per-client table are per server process and reset on restart. Per-file and per-repository download totals are stored.
 - TLS is offered by the server itself with a certificate you supply; there is no certificate renewal or client-certificate support.
@@ -112,7 +112,7 @@ Upstream signatures are checked for apt and, when a key is given, for RPM reposi
 
 ## Not built yet
 
-- LDAP/AD and OIDC sign-in, and per-repository permissions.
+- OIDC sign-in, and per-repository permissions.
 - The signed report file carrying the wishlist and missing blobs back to the collector, and wish ingest on the collector. Misses are recorded and listed (`mer wishlist`), not exported.
 - A wishlist for apt: apt never asks the server for a package that is not in the index, so "package not mirrored" does not show up as an HTTP miss. It needs a different signal. (pip, npm and container pulls do land on the wishlist.)
 - Verifying the Go checksum database's signed tree and inclusion proofs on the collector, and serving a checksum database from the vault.

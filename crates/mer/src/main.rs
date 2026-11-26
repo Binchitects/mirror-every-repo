@@ -23,6 +23,8 @@ struct Cli {
     cmd: Cmd,
 }
 
+// Parsed once at start-up; the size of the largest command does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Cmd {
     /// Create the data directory.
@@ -149,6 +151,8 @@ enum Cmd {
         /// GnuPG home of the apt site key, for apt syncs from the panel.
         #[arg(long, requires = "jobs")]
         apt_gnupghome: Option<PathBuf>,
+        #[command(flatten)]
+        ldap: LdapArgs,
     },
     /// Users of the web panel.
     User {
@@ -280,6 +284,85 @@ enum OciCmd {
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
+}
+
+/// Sign-in to the web panel through an LDAP directory. Local users (made
+/// with `mer user add`) keep working and are checked first.
+#[derive(clap::Args)]
+struct LdapArgs {
+    /// The directory: ldap://host:389 or ldaps://host:636. Without this,
+    /// only local users can sign in.
+    #[arg(long, env = "MER_LDAP_URL")]
+    ldap_url: Option<String>,
+    /// Upgrade an ldap:// connection to TLS before anything is sent.
+    #[arg(long, env = "MER_LDAP_STARTTLS")]
+    ldap_starttls: bool,
+    /// Account used to look users up (default: anonymous search).
+    #[arg(long, env = "MER_LDAP_BIND_DN", requires = "ldap_bind_password_file")]
+    ldap_bind_dn: Option<String>,
+    /// File holding the password of that account.
+    #[arg(long, env = "MER_LDAP_BIND_PASSWORD_FILE", requires = "ldap_bind_dn")]
+    ldap_bind_password_file: Option<PathBuf>,
+    /// The CA (PEM) that signed the directory's certificate, for a directory
+    /// with a certificate from a company CA. Only these CAs are trusted for
+    /// the directory; without it, the system's CAs are.
+    #[arg(long, env = "MER_LDAP_CA_FILE", requires = "ldap_url")]
+    ldap_ca_file: Option<PathBuf>,
+    /// Where users are: ou=people,dc=example,dc=org
+    #[arg(long, env = "MER_LDAP_USER_BASE", requires = "ldap_url")]
+    ldap_user_base: Option<String>,
+    /// How a user is found; {user} is the name typed at sign-in. For
+    /// Active Directory: (sAMAccountName={user})
+    #[arg(long, env = "MER_LDAP_USER_FILTER", default_value = "(uid={user})")]
+    ldap_user_filter: String,
+    /// Where groups are. Without it only the memberOf attribute of the user is read.
+    #[arg(long, env = "MER_LDAP_GROUP_BASE")]
+    ldap_group_base: Option<String>,
+    /// How the groups of a user are found; {dn} is the entry of the user.
+    #[arg(long, env = "MER_LDAP_GROUP_FILTER", default_value = "(|(member={dn})(uniqueMember={dn})(memberUid={user}))")]
+    ldap_group_filter: String,
+    /// Group whose members are admins: its name (cn) or full DN (repeatable).
+    #[arg(long = "ldap-admin-group", env = "MER_LDAP_ADMIN_GROUP")]
+    ldap_admin_groups: Vec<String>,
+    /// Group whose members are operators (repeatable).
+    #[arg(long = "ldap-operator-group", env = "MER_LDAP_OPERATOR_GROUP")]
+    ldap_operator_groups: Vec<String>,
+    /// Group whose members are viewers (repeatable).
+    #[arg(long = "ldap-viewer-group", env = "MER_LDAP_VIEWER_GROUP")]
+    ldap_viewer_groups: Vec<String>,
+}
+
+impl LdapArgs {
+    fn config(self) -> Result<Option<mer_ldap::LdapConfig>> {
+        let Some(url) = self.ldap_url else { return Ok(None) };
+        let bind_password = match &self.ldap_bind_password_file {
+            Some(path) => Some(std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?.trim_end_matches(['\r', '\n']).to_string()),
+            None => None,
+        };
+        let cfg = mer_ldap::LdapConfig {
+            url,
+            starttls: self.ldap_starttls,
+            bind_dn: self.ldap_bind_dn,
+            bind_password,
+            user_base: self.ldap_user_base.ok_or_else(|| anyhow!("--ldap-user-base is needed with --ldap-url"))?,
+            user_filter: self.ldap_user_filter,
+            group_base: self.ldap_group_base,
+            group_filter: self.ldap_group_filter,
+            admin_groups: self.ldap_admin_groups,
+            operator_groups: self.ldap_operator_groups,
+            viewer_groups: self.ldap_viewer_groups,
+            timeout: std::time::Duration::from_secs(10),
+            tls: match &self.ldap_ca_file {
+                Some(path) => {
+                    let pem = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+                    Some(mer_ldap::tls_trusting(&pem).map_err(|e| anyhow!("--ldap-ca-file {}: {e}", path.display()))?)
+                }
+                None => None,
+            },
+        };
+        cfg.validate().map_err(|e| anyhow!("LDAP settings: {e}"))?;
+        Ok(Some(cfg))
+    }
 }
 
 #[derive(Subcommand)]
@@ -1460,7 +1543,7 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Cmd::Serve { listen, admin_listen, no_admin, tls_cert, tls_key, threads, quiet, jobs, files, bundle_key, apt_gnupghome } => {
+        Cmd::Serve { listen, admin_listen, no_admin, tls_cert, tls_key, threads, quiet, jobs, files, bundle_key, apt_gnupghome, ldap } => {
             let app = if jobs {
                 if no_admin {
                     bail!("--jobs needs the web panel; drop --no-admin");
@@ -1486,6 +1569,14 @@ fn main() -> Result<()> {
             } else {
                 mer_http::App::new(open(&data)?)
             };
+            let directory = ldap.config()?;
+            if let Some(cfg) = &directory {
+                println!("sign-in also through LDAP: {}", cfg.describe());
+                if cfg.url.starts_with("ldap://") && !cfg.starttls {
+                    println!("note: the LDAP connection is not encrypted, so passwords cross the network in clear (use ldaps:// or --ldap-starttls)");
+                }
+                app.auth().set_directory(std::sync::Arc::new(cfg.clone()));
+            }
             let tls = match (tls_cert, tls_key) {
                 (Some(c), Some(k)) => Some((
                     std::fs::read(&c).with_context(|| format!("reading {}", c.display()))?,
@@ -1520,7 +1611,7 @@ fn main() -> Result<()> {
             if !no_admin && scheme == "http" {
                 println!("note: the web panel is on plain HTTP, so passwords and sessions are not encrypted on the wire (use --tls-cert and --tls-key)");
             }
-            if !no_admin && app.auth().needs_setup()? {
+            if !no_admin && directory.is_none() && app.auth().needs_setup()? {
                 println!("note: no user exists yet; create the first administrator with `mer user add admin --role admin`");
             }
             if let Some(p) = panel {

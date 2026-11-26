@@ -406,6 +406,37 @@ mer user disable olga
 
 Add `--password-stdin` to supply a password instead of having one generated. Five wrong passwords lock a user name for a minute. Every sign-in and every change is in the audit log with the user's name.
 
+### Sign in through a company directory (LDAP)
+
+People can sign in to the panel with their directory account (OpenLDAP, Active Directory, FreeIPA). The panel finds the user with a search, checks the password by binding as that user, and reads the user's groups; the groups you name decide the role. Someone in none of them cannot sign in.
+
+With the installer, fill in `/etc/mer/ldap.env` (it lists every setting, commented out) and restart the service (`sudo systemctl restart mer-vault`, or `mer-panel` on a collector). Upgrades never overwrite that file. By hand, the same settings are options of `mer serve`:
+
+```text
+mer serve ... \
+  --ldap-url ldaps://dc1.example.org:636 \
+  --ldap-ca-file /etc/mer/ldap-ca.pem \
+  --ldap-bind-dn 'cn=mirror,ou=service,dc=example,dc=org' --ldap-bind-password-file /etc/mer/ldap-bind-password \
+  --ldap-user-base 'ou=people,dc=example,dc=org' \
+  --ldap-group-base 'ou=groups,dc=example,dc=org' \
+  --ldap-admin-group mirror-admins --ldap-operator-group mirror-operators --ldap-viewer-group mirror-viewers
+```
+
+| Setting | Meaning |
+|---|---|
+| `--ldap-url` | `ldaps://host:636`, or `ldap://host:389` with `--ldap-starttls` so nothing is sent unencrypted |
+| `--ldap-ca-file` | The CA that signed the directory's certificate. Only it is trusted for the directory; without it, the system's CAs are |
+| `--ldap-bind-dn`, `--ldap-bind-password-file` | The account that looks users up. The password is read from a file, never from the command line. Without them, the search is anonymous |
+| `--ldap-user-base`, `--ldap-user-filter` | Where users are and how one is found. The filter defaults to `(uid={user})`; for Active Directory use `(sAMAccountName={user})` |
+| `--ldap-group-base`, `--ldap-group-filter` | Where groups are. Without a base, the user's `memberOf` attribute is read instead |
+| `--ldap-admin-group`, `--ldap-operator-group`, `--ldap-viewer-group` | Groups, by name (`cn`) or full DN, that grant each role. Repeatable on the command line; one each in the settings file |
+
+- Local users (such as `admin` from the installer) are checked first, and still work when the directory is down or not answering. A directory user who cannot be checked gets "the directory cannot be asked right now"; the reason is in the audit log.
+- The role is read from the directory at every sign-in, so moving someone between groups takes effect the next time they sign in. Changing a directory user's role in the panel lasts only until then.
+- A directory user has no password here and cannot be given one. An administrator can still disable a directory user in the panel, which shuts them out whatever the directory says.
+- Nothing a user types can change the search: names are escaped, names that could not be local user names are not sent at all, and an empty password is refused before anything reaches the directory.
+- Each step waits at most 10 seconds for the directory.
+
 ### Private repositories
 
 By default a published repo can be read by any machine that reaches the vault. To require a token:

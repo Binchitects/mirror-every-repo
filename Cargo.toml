@@ -30,6 +30,7 @@ mer-format-go = { path = "crates/mer-format-go" }
 mer-format-helm = { path = "crates/mer-format-helm" }
 mer-format-rpm = { path = "crates/mer-format-rpm" }
 mer-format-maven = { path = "crates/mer-format-maven" }
+mer-ldap = { path = "crates/mer-ldap" }
 mer-http = { path = "crates/mer-http" }
 mer-auth = { path = "crates/mer-auth" }
 
@@ -43,6 +44,9 @@ lzma-rs = "0.3"
 base64 = "0.22"
 sha1 = "0.10"
 libc = "0.2"
+# The same rustls and crypto provider (ring) the rest of the program uses.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+ldap3 = { version = "0.12.1", default-features = false, features = ["sync", "tls-rustls-ring"] }
 
 ureq = "2"
 tiny_http = { version = "0.12", features = ["ssl-rustls"] }
