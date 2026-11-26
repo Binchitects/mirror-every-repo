@@ -8,6 +8,10 @@ All notable changes to this project are recorded here. Versions follow [Semantic
 
 - **Helm charts**: charts mirrored from a chart repository at their newest stable or an exact version, each checked against the digest in the upstream `index.yaml`. Stock `helm` adds the vault as a repository, pulls and installs from it. `mer helm sync`.
 
+### Collector
+
+- Redirects from upstreams are now held to the host allowlist. Before, the HTTP library followed them to any host. Each hop is checked; a redirect to a host that is not allowed fails with its name and the `--allow-host` to add, https-to-http redirects are refused, and credentials are not sent on to another host. The blob hosts of Docker Hub, quay.io and ghcr.io, and GitHub's release asset hosts, are allowed by default. An apt upstream follows redirects within its own host only.
+
 ## [1.1.0] - 2026-11-26
 
 ### Formats

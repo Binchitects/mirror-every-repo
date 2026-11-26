@@ -10,7 +10,6 @@ pub use client::{host_of, HttpClient, HttpResponse};
 use mer_core::validate_path;
 use std::io::Read;
 use std::path::PathBuf;
-use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
@@ -81,9 +80,10 @@ impl Upstream for DirUpstream {
     }
 }
 
+/// A remote mirror. Redirects are followed within its own host only.
 pub struct HttpUpstream {
     base: String,
-    agent: ureq::Agent,
+    client: HttpClient,
 }
 
 impl HttpUpstream {
@@ -91,12 +91,8 @@ impl HttpUpstream {
         if !(base.starts_with("http://") || base.starts_with("https://")) {
             return Err(FetchError::BadUpstream(format!("{base:?} is not an http(s) URL")));
         }
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(30))
-            .timeout_read(Duration::from_secs(120))
-            .user_agent("mer-collector")
-            .build();
-        Ok(HttpUpstream { base: base.trim_end_matches('/').to_string(), agent })
+        let host = host_of(base).ok_or_else(|| FetchError::BadUpstream(format!("{base:?} is not an http(s) URL")))?;
+        Ok(HttpUpstream { base: base.trim_end_matches('/').to_string(), client: HttpClient::new(&[host]) })
     }
 }
 
@@ -107,11 +103,11 @@ impl Upstream for HttpUpstream {
         if !path.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-._~+%=@:,".contains(&b)) {
             return Err(FetchError::BadPath(path.to_string()));
         }
-        match self.agent.get(&format!("{}/{}", self.base, path)).call() {
-            Ok(resp) => Ok(Box::new(resp.into_reader())),
-            Err(ureq::Error::Status(404, _)) => Err(FetchError::NotFound(path.into())),
-            Err(ureq::Error::Status(status, _)) => Err(FetchError::Http { path: path.into(), status }),
-            Err(e) => Err(FetchError::Transport { path: path.into(), reason: e.to_string() }),
+        match self.client.get(&format!("{}/{}", self.base, path), &[]) {
+            Ok(resp) => Ok(resp.into_reader()),
+            Err(FetchError::NotFound(_)) => Err(FetchError::NotFound(path.into())),
+            Err(FetchError::Http { status, .. }) => Err(FetchError::Http { path: path.into(), status }),
+            Err(e) => Err(e),
         }
     }
     fn describe(&self) -> String {
@@ -131,6 +127,7 @@ pub fn upstream_from(spec: &str) -> Result<Box<dyn Upstream>, FetchError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::resolve;
 
     fn mirror() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -220,6 +217,79 @@ mod tests {
         assert!(matches!(client.get(&format!("{base}/a b"), &[]), Err(FetchError::BadPath(_))));
         assert_eq!(host_of("HTTPS://PyPI.org/simple/x/").as_deref(), None, "scheme must be lower-case");
         assert_eq!(host_of("https://PyPI.org:443/simple/x/?q#f").as_deref(), Some("pypi.org:443"));
+    }
+
+    /// A server whose answers are redirects: `/to?<location>` answers 302 to
+    /// `<location>`, `/loop` redirects to itself, `/auth` echoes the
+    /// Authorization header it got.
+    fn redirector() -> String {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let addr = server.server_addr().to_ip().unwrap();
+        std::thread::spawn(move || {
+            for req in server.incoming_requests() {
+                let url = req.url().to_string();
+                let redirect = |loc: &str| {
+                    tiny_http::Response::from_string("").with_status_code(302).with_header(tiny_http::Header::from_bytes("Location", loc).unwrap()).boxed()
+                };
+                let resp = if let Some(loc) = url.strip_prefix("/to?") {
+                    redirect(loc)
+                } else if url == "/nolocation" {
+                    tiny_http::Response::from_string("").with_status_code(302).boxed()
+                } else if url == "/loop" {
+                    redirect("/loop")
+                } else if url == "/auth" {
+                    let got = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.to_string()).unwrap_or_default();
+                    tiny_http::Response::from_string(format!("auth={got}")).boxed()
+                } else {
+                    tiny_http::Response::from_string("plain").boxed()
+                };
+                let _ = req.respond(resp);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[test]
+    fn redirects_are_followed_only_to_allowed_hosts() {
+        let dir = mirror();
+        let files = serve(dir.path().to_path_buf());
+        let hops = redirector();
+        let client = HttpClient::new(&[host_of(&files).unwrap(), host_of(&hops).unwrap()]);
+        let read = |url: &str| client.get(url, &[]).and_then(|r| r.bytes(url, 1000));
+
+        // Absolute, root-relative and relative locations, within the allowlist.
+        assert_eq!(read(&format!("{hops}/to?{files}/dists/stable/Release")).unwrap(), b"Suite: stable\n");
+        assert_eq!(read(&format!("{hops}/to?/plain")).unwrap(), b"plain");
+        assert_eq!(read(&format!("{hops}/a/b/to?c")).unwrap(), b"plain", "relative to /a/b/");
+
+        // To a host that is not on the list: refused before it is contacted, naming the host.
+        let elsewhere = files.replace("127.0.0.1", "localhost");
+        match read(&format!("{hops}/to?{elsewhere}/big")) {
+            Err(FetchError::BadUpstream(m)) => assert!(m.contains("--allow-host localhost"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        // A loop ends.
+        assert!(matches!(read(&format!("{hops}/loop")), Err(FetchError::BadUpstream(m)) if m.contains("redirects")));
+        // No location, or a downgrade from https, is refused.
+        assert!(matches!(read(&format!("{hops}/nolocation")), Err(FetchError::BadUpstream(m)) if m.contains("Location")));
+    assert_eq!(resolve("https://a.example/x", "  "), None);
+        assert_eq!(resolve("https://a.example/x/y", "http://b.example/z").as_deref(), Some("http://b.example/z"));
+        assert_eq!(resolve("https://a.example/x/y?q", "//b.example/z#f").as_deref(), Some("https://b.example/z"));
+        assert_eq!(resolve("https://a.example", "z").as_deref(), Some("https://a.example/z"));
+
+        // Credentials stay with the host they were meant for.
+        let auth = [("Authorization", "Bearer secret")];
+        let same = client.get(&format!("{hops}/to?/auth"), &auth).unwrap().bytes("auth", 100).unwrap();
+        assert_eq!(same, b"auth=Bearer secret");
+        let both = HttpClient::new(&[host_of(&hops).unwrap(), host_of(&hops.replace("127.0.0.1", "localhost")).unwrap()]);
+        let other = hops.replace("127.0.0.1", "localhost");
+        let crossed = both.get(&format!("{hops}/to?{other}/auth"), &auth).unwrap().bytes("auth", 100).unwrap();
+        assert_eq!(crossed, b"auth=", "not sent to another host");
+
+        // An apt-style upstream follows redirects within its own host only.
+        let up = HttpUpstream::new(&hops).unwrap();
+        assert_eq!(up.read("to?/plain", 100).ok(), None, "query strings are refused before any request");
+        assert!(matches!(up.read("loop", 100), Err(FetchError::BadUpstream(_))));
     }
 
     #[test]

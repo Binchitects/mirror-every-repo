@@ -16,7 +16,7 @@
 | `mer-bundle` | Collector: delta computation without feedback, seal, sign. Vault: staging, resumable assembly, import, chained per-repo apply |
 | `mer-transport-media` | `.mab` volume writer and reader for removable media |
 | `mer-transport-diode` | One-way UDP sender (passes, interleaving, pacing) and receiver |
-| `mer-fetch` | Upstream access for the collector: HTTP(S) mirror or a local directory, and an HTTP client that only contacts allowlisted hosts |
+| `mer-fetch` | Upstream access for the collector: HTTP(S) mirror or a local directory, and an HTTP client that only contacts allowlisted hosts, redirects included (followed one by one, never to another host unless it is allowed, never from https to http, without carrying credentials to another host) |
 | `mer-format-apt` | Debian/Ubuntu repos: upstream signature check, index parsing, dependency closure, verified download, generation and site-signing of the subset repository |
 | `mer-format-pypi` | Python indexes: PEP 440 versions and specifiers, PEP 508 requirements and markers, wheel tags, dependency following, verified download, static PEP 503 index |
 | `mer-format-npm` | npm registries: semver ranges, resolution of dependency ranges to versions, platform filtering, tarballs verified against the registry integrity hash, filtered package documents |

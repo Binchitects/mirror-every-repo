@@ -1125,10 +1125,19 @@ fn main() -> Result<()> {
                 let st = open(&data)?;
                 let mut hosts = allow_hosts;
                 let host = mer_fetch::host_of(&registry).ok_or_else(|| anyhow!("{registry:?} is not an http(s) URL"))?;
-                if host == "registry-1.docker.io" {
-                    hosts.push("auth.docker.io".into()); // Docker Hub hands out pull tokens here
-                }
+                // Where well-known registries hand out pull tokens and send
+                // blob downloads (the collector follows redirects only to
+                // allowed hosts).
+                let extra: &[&str] = match host.as_str() {
+                    "registry-1.docker.io" => &["auth.docker.io", "production.cloudflare.docker.com"],
+                    "quay.io" => &["cdn01.quay.io", "cdn02.quay.io", "cdn03.quay.io"],
+                    "ghcr.io" => &["pkg-containers.githubusercontent.com"],
+                    _ => &[],
+                };
+                hosts.extend(extra.iter().map(|h| h.to_string()));
                 hosts.push(host);
+                hosts.sort();
+                hosts.dedup();
                 let client = mer_fetch::HttpClient::new(&hosts);
                 let cfg = mer_format_oci::OciConfig { registry, images, platforms };
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.registry, hosts.join(", "));
@@ -1252,6 +1261,12 @@ fn main() -> Result<()> {
                 let st = open(&data)?;
                 let mut hosts = allow_hosts;
                 hosts.push(mer_fetch::host_of(&upstream).ok_or_else(|| anyhow!("{upstream:?} is not an http(s) URL"))?);
+                // GitHub release downloads redirect to its asset hosts.
+                if hosts.iter().any(|h| h == "github.com") {
+                    hosts.extend(["release-assets.githubusercontent.com".to_string(), "objects.githubusercontent.com".to_string()]);
+                }
+                hosts.sort();
+                hosts.dedup();
                 let client = mer_fetch::HttpClient::new(&hosts);
                 let cfg = mer_format_helm::HelmConfig { repo: upstream, charts };
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.repo, hosts.join(", "));

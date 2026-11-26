@@ -179,7 +179,7 @@ mer helm sync helm --upstream https://charts.jetstack.io -c cert-manager -c cert
 - `--upstream` is the chart repository URL, the one you would give `helm repo add`.
 - A chart without a version means its newest stable version. `name@version` is exactly that version; repeat a chart to keep several.
 - Charts include their dependencies (`charts/` inside the archive), so nothing else needs mirroring.
-- Each chart is checked against the SHA-256 digest in the upstream index. If a repository keeps its chart files on another host (GitHub releases, for example), allow it with `--allow-host github.com`.
+- Each chart is checked against the SHA-256 digest in the upstream index. If a repository keeps its chart files on another host (GitHub releases, for example), allow it with `--allow-host github.com`; GitHub's asset download hosts are then allowed too.
 - Charts published to OCI registries (`oci://...`) are not covered by this format.
 
 ### Container images
@@ -204,7 +204,7 @@ The repo becomes a copy of the directory tree.
 
 ### Contacting other hosts
 
-The collector only connects to the upstream host you name, plus the hosts that upstream is known to use (`files.pythonhosted.org` for PyPI, `auth.docker.io` for Docker Hub). If a private upstream keeps files or tokens on another host, allow it with `--allow-host`.
+The collector only connects to the upstream host you name, plus the hosts that upstream is known to use: `files.pythonhosted.org` for PyPI, `static.crates.io` for crates.io, `auth.docker.io` and `production.cloudflare.docker.com` for Docker Hub, `cdn01.quay.io` to `cdn03.quay.io` for quay.io, `pkg-containers.githubusercontent.com` for ghcr.io, and GitHub's release asset hosts whenever `github.com` is allowed. This includes redirects: a redirect to any other host is refused, never followed, and the error names the host. If that host is expected (a private registry's storage, a CDN), allow it with `--allow-host`. Redirects from https to http are always refused, and credentials are never sent on to another host.
 
 ## Carry bundles across
 
