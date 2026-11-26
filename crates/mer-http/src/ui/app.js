@@ -291,6 +291,9 @@ function clientSetupDialog(r) {
     if (r.private) add(secure ? "Token, in ~/.netrc (machine is host:port)" : "Token: go sends credentials only over HTTPS, so serve this repository with TLS", [
       `machine ${host} login go password <token>`,
     ]);
+  } else if (r.format === "helm") {
+    add("Add the vault as a chart repository", [`helm repo add vault ${base}/`, "helm search repo vault/"]);
+    if (r.private) add("Token", [`helm repo add vault ${base}/ --username any --password <token>`]);
   } else if (r.format === "oci") {
     add("Pull an image", [`docker pull ${host}/${r.name}/<image>:<tag>`, `# for example: docker pull ${host}/${r.name}/library/alpine:3.20`]);
     if (!secure) add("Plain HTTP needs to be allowed on the client (or serve with TLS)", ['# /etc/docker/daemon.json', `{ "insecure-registries": ["${host}"] }`]);

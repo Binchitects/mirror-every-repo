@@ -16,6 +16,7 @@ NODE="docker compose exec -T nodeclient"
 NET="docker compose exec -T dotnetclient"
 RS="docker compose exec -T rustclient"
 GO="docker compose exec -T goclient"
+HELM="docker compose exec -T helmclient"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK: %s\n' "$*"; }
 fail() { printf '  FAILED: %s\n' "$*"; exit 1; }
@@ -203,14 +204,29 @@ if $GO sh -c 'cd /tmp/app && go get github.com/google/uuid@v1.6.0' >/dev/null 2>
 else ok "a module that is not mirrored cannot be fetched"; fi
 case "$($V mer wishlist)" in *"go  github.com/google/uuid"*) ok "the request for google/uuid is on the wishlist" ;; *) $V mer wishlist; fail "google/uuid is not on the wishlist" ;; esac
 
-step "15. Containers: mirror 'alpine:3.20' from Docker Hub"
+step "15. Helm: mirror the 'cert-manager' chart from charts.jetstack.io"
+$C mer repo add helm --format helm
+$C mer helm sync helm --upstream https://charts.jetstack.io -c cert-manager
+carry
+
+step "16. Helm: add the vault as a chart repository and render the chart with a stock helm"
+$HELM timeout 5 sh -c 'nc -z 1.1.1.1 443' 2>/dev/null && fail "helm client can reach the internet" || ok "helm client cannot reach the internet"
+$HELM helm repo add vault http://vault:8080/helm/ 2>&1 | sed 's/^/  | /'
+$HELM helm search repo vault/ 2>&1 | sed 's/^/  | /'
+$HELM sh -c 'cd /tmp && rm -f cert-manager-*.tgz && helm pull vault/cert-manager && ls cert-manager-*.tgz' | tr -d '\r' | sed 's/^/  pulled: /'
+COUNT=$($HELM sh -c 'helm template cm vault/cert-manager --namespace cert-manager | grep -c "^kind: Deployment"' | tr -d '\r')
+[ "$COUNT" -ge 3 ] && ok "chart from the vault renders: $COUNT Deployments" || fail "chart did not render ($COUNT)"
+if $HELM helm pull vault/trust-manager >/dev/null 2>&1; then fail "trust-manager was pullable although it is not mirrored"
+else ok "a chart that is not mirrored cannot be pulled"; fi
+
+step "17. Containers: mirror 'alpine:3.20' from Docker Hub"
 $C mer repo add hub --format oci
 SYNC=$($C mer oci sync hub -i library/alpine:3.20 | tr -d '\r')
 echo "$SYNC"
 UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
 carry
 
-step "16. Containers: pull and run with a real Docker engine, from the vault only"
+step "18. Containers: pull and run with a real Docker engine, from the vault only"
 # The vault itself has no published ports (its network is internal), so a
 # second server process on the same vault data is exposed on localhost for
 # the Docker engine of this machine. The image is pulled under a name that
@@ -231,7 +247,7 @@ case "$($V mer wishlist)" in *"images/library/busybox:latest"*) ok "the request 
 docker rmi -f "$IMG" >/dev/null 2>&1 || true
 docker rm -f mer-registry >/dev/null 2>&1 || true
 
-step "17. vault: state and integrity"
+step "19. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log' | sed 's/^/  requests answered with 200: /'

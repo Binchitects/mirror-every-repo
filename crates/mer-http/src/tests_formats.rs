@@ -458,3 +458,15 @@ fn go_modules_are_served_the_way_goproxy_clients_ask_for_them() {
     w.sort();
     assert_eq!(w, vec![("github.com/BurntSushi/toml@v1.5.0".to_string(), 1), ("github.com/Google/uuid".to_string(), 1), ("golang.org/x/text".to_string(), 1)]);
 }
+
+#[test]
+fn helm_repositories_are_served_the_way_helm_asks_for_them() {
+    let r = rig("charts", "helm", &[("index.yaml", br#"{"apiVersion":"v1","entries":{}}"#), ("charts/app-1.0.0.tgz", b"chart bytes")]);
+    assert_eq!(get(&r, "/charts/index.yaml").0, 200);
+    assert_eq!(get(&r, "/charts/charts/app-1.0.0.tgz").1, "chart bytes");
+    assert_eq!(get(&r, "/charts/charts/app-2.0.0.tgz").0, 404);
+    for path in ["/charts/charts/app-1.0.0.tgz.prov", "/charts/charts/..%2fmeta.db.tgz", "/charts/index.json", "/charts/charts/a/b.tgz"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![("app-2.0.0".to_string(), 1)]);
+}

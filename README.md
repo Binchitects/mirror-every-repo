@@ -6,14 +6,14 @@
 
 **Package repositories for networks that have no internet.**
 
-`mirror-every-repo` keeps apt, PyPI, npm, NuGet, Cargo, Go module and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `pip`, `npm`, `dotnet`, `cargo`, `go` and `docker` clients.
+`mirror-every-repo` keeps apt, PyPI, npm, NuGet, Cargo, Go module, Helm chart and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `pip`, `npm`, `dotnet`, `cargo`, `go`, `helm` and `docker` clients.
 
 It is one binary, `mer`, written in Rust, shipped as a container image.
 
 ```mermaid
 flowchart LR
   subgraph out [Internet side]
-    U[Debian, PyPI, npm,<br/>NuGet, crates.io, Go,<br/>Docker Hub] --> C[collector]
+    U[Debian, PyPI, npm,<br/>NuGet, crates.io, Go,<br/>Helm, Docker Hub] --> C[collector]
   end
   C -- "signed delta bundle" --> M[(USB, disk, DVD)]
   C -- "one-way UDP<br/>with error correction" --> D{{data diode}}
@@ -39,7 +39,7 @@ General repository managers assume both sides can talk to each other. An air gap
 
 | | |
 |---|---|
-| **Formats** | apt (Debian, Ubuntu), PyPI, npm, NuGet (.NET), Cargo (Rust), Go modules, container images (OCI and Docker), plain files |
+| **Formats** | apt (Debian, Ubuntu), PyPI, npm, NuGet (.NET), Cargo (Rust), Go modules, Helm charts, container images (OCI and Docker), plain files |
 | **Transfer** | Removable media volumes sized to the medium; one-way UDP with RaptorQ error correction for data diodes |
 | **Integrity** | Ed25519-signed bundles with k-of-n signers, a Merkle proof per segment, SHA-256 content addressing, upstream hashes and signatures checked before anything enters a snapshot |
 | **Control** | Quarantine with review of what would change, approve or reject, atomic publish, instant rollback, hash-chained audit log |
@@ -109,6 +109,9 @@ mer cargo sync cargo -c 'serde@1:derive' -c tokio@1 --lockfile Cargo.lock
 mer repo add go --format go
 mer go sync go -m github.com/spf13/cobra@v1.8.1 --gosum go.sum
 
+mer repo add helm --format helm
+mer helm sync helm --upstream https://charts.jetstack.io -c cert-manager
+
 mer repo add hub --format oci
 mer oci sync hub -i library/alpine:3.20 -i library/nginx:1.27
 
@@ -136,6 +139,7 @@ dotnet nuget add source https://vault:8080/nuget/v3/index.json --name vault
 docker pull vault:8080/hub/library/alpine:3.20
 # cargo: .cargo/config.toml replaces crates.io with sparse+https://vault:8080/cargo/
 go env -w GOPROXY=https://vault:8080/go/ GOSUMDB=off GOTOOLCHAIN=local
+helm repo add vault https://vault:8080/helm/
 ```
 
 The panel shows these lines for each repository, with your vault's address filled in, under "Client setup".
@@ -155,6 +159,7 @@ What the collector trusts upstream depends on the format:
 | npm | TLS to the registry | Every tarball against the registry integrity hash |
 | NuGet | TLS to the feed | Every package against the SHA-512 in the feed catalog |
 | Go | TLS to the proxy and to the checksum database (or a given `go.sum`) | Every module zip and `go.mod` against its `h1:` hash |
+| Helm | TLS to the chart repository | Every chart against the SHA-256 digest in its `index.yaml` |
 | Cargo | TLS to the index | Every `.crate` against the SHA-256 in the index (and in `Cargo.lock`, when one is given) |
 | Containers | TLS for tag to digest | Every manifest, config and layer against its digest |
 

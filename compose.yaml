@@ -86,6 +86,13 @@ services:
       GOSUMDB: "off"
       GOTOOLCHAIN: local
 
+  helmclient:
+    image: alpine/helm:3.16.2
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+
 networks:
   internet: {}
   diode:

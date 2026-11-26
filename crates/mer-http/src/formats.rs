@@ -332,6 +332,25 @@ fn go_module_path(path: &str) -> bool {
         && path.split('/').all(|e| !e.is_empty() && !e.starts_with('.') && !e.ends_with('.') && e.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')))
 }
 
+// ------------------------------------------------------------------ helm
+
+/// A chart repository is `index.yaml` and the chart archives it names. Helm
+/// looks a chart up in its local copy of the index, so a chart that is not
+/// mirrored never reaches the vault; a missing archive is still a wish.
+fn helm(raw: &str) -> Route {
+    let not_found = || Route::Done(Reply::text(404, "not found\n"));
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::text(400, "bad request\n")) };
+    if path == "index.yaml" {
+        return Route::Mapped { path, wish: None };
+    }
+    match path.strip_prefix("charts/").and_then(|f| f.strip_suffix(".tgz")) {
+        Some(stem) if !stem.is_empty() && !stem.starts_with('.') && stem.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'+')) => {
+            Route::Mapped { wish: Some(stem.to_string()), path }
+        }
+        _ => not_found(),
+    }
+}
+
 // ------------------------------------------------------------ containers
 
 const API_VERSION: (&str, &str) = ("Docker-Distribution-API-Version", "registry/2.0");
@@ -479,6 +498,7 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "nuget" => nuget(app, req, tls, repo, path),
         "cargo" => cargo(app, req, tls, repo, path),
         "go" => golang(app, repo, path),
+        "helm" => helm(path),
         _ => Route::Unhandled,
     }
 }

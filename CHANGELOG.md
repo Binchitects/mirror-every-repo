@@ -2,6 +2,12 @@
 
 All notable changes to this project are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Formats
+
+- **Helm charts**: charts mirrored from a chart repository at their newest stable or an exact version, each checked against the digest in the upstream `index.yaml`. Stock `helm` adds the vault as a repository, pulls and installs from it. `mer helm sync`.
+
 ## [1.1.0] - 2026-11-26
 
 ### Formats

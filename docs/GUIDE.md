@@ -19,7 +19,7 @@ This guide takes you from nothing to a working mirror across an air gap, then co
 |---|---|
 | **collector** | The host on the internet side. Mirrors upstreams and produces bundles. |
 | **vault** | The host inside the air gap. Imports bundles and serves clients. |
-| **repo** | One repository of one format (`apt`, `pypi`, `npm`, `nuget`, `cargo`, `go`, `oci`, `raw`). |
+| **repo** | One repository of one format (`apt`, `pypi`, `npm`, `nuget`, `cargo`, `go`, `helm`, `oci`, `raw`). |
 | **snapshot** | An immutable state of a repo, numbered per repo. Clients only ever see one whole snapshot. |
 | **bundle** | A signed file set holding what changed in all repos since the previous bundle. Numbered per channel. |
 | **channel** | One collector-to-vault stream of bundles. The default channel is enough unless one collector feeds several vaults. |
@@ -169,6 +169,19 @@ mer go sync go --gomod path/to/go.mod
 - Every `.zip` and `.mod` is checked against the hash in the Go checksum database (`--sumdb`, default `sum.golang.org`) unless a given `go.sum` has it. For private modules that the checksum database cannot know, pass their `go.sum` and `--no-sumdb`.
 - `--proxy` selects another module proxy (default `proxy.golang.org`).
 
+### Helm charts
+
+```text
+mer repo add helm --format helm
+mer helm sync helm --upstream https://charts.jetstack.io -c cert-manager -c cert-manager@v1.15.3
+```
+
+- `--upstream` is the chart repository URL, the one you would give `helm repo add`.
+- A chart without a version means its newest stable version. `name@version` is exactly that version; repeat a chart to keep several.
+- Charts include their dependencies (`charts/` inside the archive), so nothing else needs mirroring.
+- Each chart is checked against the SHA-256 digest in the upstream index. If a repository keeps its chart files on another host (GitHub releases, for example), allow it with `--allow-host github.com`.
+- Charts published to OCI registries (`oci://...`) are not covered by this format.
+
 ### Container images
 
 ```text
@@ -279,10 +292,11 @@ Client configuration, with `vault:8080` as the package listener:
 | dotnet | `dotnet nuget add source https://vault:8080/nuget/v3/index.json --name vault`, and remove the default source. Restore works; searching for packages does not. |
 | cargo | In `.cargo/config.toml`: `[source.crates-io]` `replace-with = "vault"` and `[source.vault]` `registry = "sparse+https://vault:8080/cargo/"`. Build works; `cargo search` and `cargo publish` do not. |
 | go | `go env -w GOPROXY=https://vault:8080/go/ GOSUMDB=off GOTOOLCHAIN=local`. Downloads, `go mod tidy` and `go build` work; `go` still checks everything against the project's `go.sum`. |
+| helm | `helm repo add vault https://vault:8080/helm/`, then `helm install` or `helm pull vault/<chart>` as usual. |
 | docker | `docker pull vault:8080/hub/library/alpine:3.20`. The image name is `<vault>/<repo>/<upstream name>`. |
 | files | `curl -O https://vault:8080/tools/<path>` |
 
-On plain HTTP, clients need to be told to accept it: `--trusted-host vault` for pip, `--allow-insecure-connections` for the dotnet source, `insecure-registries` in Docker's `daemon.json`. apt, npm, cargo and go accept `http://` URLs as they are (go then cannot send a token; see below).
+On plain HTTP, clients need to be told to accept it: `--trusted-host vault` for pip, `--allow-insecure-connections` for the dotnet source, `insecure-registries` in Docker's `daemon.json`. apt, npm, cargo, go and helm accept `http://` URLs as they are (go then cannot send a token; see below).
 
 The panel's "Client setup" button shows these lines for each repo with your address filled in.
 
@@ -329,9 +343,10 @@ A token without `--repo` is valid for every repo. Clients send the token as a pa
 | dotnet | `dotnet nuget add source ... --username any --password <token> --store-password-in-clear-text` |
 | cargo | In `.cargo/config.toml`, define the vault as `[registries.vault]` `index = "sparse+https://vault:8080/cargo/"` (instead of `[source.vault]`), keep `replace-with = "vault"`, and add `[registry]` `global-credential-providers = ["cargo:token"]`. Put the token in `~/.cargo/credentials.toml` as `[registries.vault]` `token = "<token>"`, or in `CARGO_REGISTRIES_VAULT_TOKEN`. `cargo login` does not work, because the vault has no registry API. |
 | go | `~/.netrc`: `machine vault:8080 login go password <token>` (the machine name includes the port). Go sends credentials only over HTTPS, so a private Go repo needs the vault on TLS. |
+| helm | `helm repo add vault https://vault:8080/helm/ --username any --password <token>` |
 | docker | `docker login vault:8080` with any user name and the token as password |
 
-The apt, Cargo and Go flows are tested end to end with real clients. The others rely on the same Basic and Bearer handling, which is covered by the server's tests. Cargo sends the token on its own, without `Bearer`, which the vault also accepts.
+The apt, Cargo, Go and Helm flows are tested end to end with real clients. The others rely on the same Basic and Bearer handling, which is covered by the server's tests. Cargo sends the token on its own, without `Bearer`, which the vault also accepts.
 
 ## Day-to-day operation
 
