@@ -92,6 +92,15 @@ services:
       GOSUMDB: "off"
       GOTOOLCHAIN: local
 
+  # A stock Alpine machine inside the air gap, an older point release than
+  # the index, so that apk upgrade has work to do.
+  apkclient:
+    image: alpine:3.24.0
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+
   rpmclient:
     image: rockylinux:9
     depends_on: [vault]

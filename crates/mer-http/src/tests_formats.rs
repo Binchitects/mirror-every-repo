@@ -484,6 +484,18 @@ fn rpm_repositories_are_served_the_way_dnf_asks_for_them() {
 }
 
 #[test]
+fn apk_repositories_are_served_the_way_apk_asks_for_them() {
+    let r = rig("alpine", "apk", &[("main/x86_64/APKINDEX.tar.gz", b"signed index"), ("main/x86_64/curl-8.23.0-r0.apk", b"apk bytes")]);
+    assert_eq!(get(&r, "/alpine/main/x86_64/APKINDEX.tar.gz").1, "signed index");
+    assert_eq!(get(&r, "/alpine/main/x86_64/curl-8.23.0-r0.apk").1, "apk bytes");
+    assert_eq!(get(&r, "/alpine/main/x86_64/jq-1.8.2-r0.apk").0, 404);
+    for path in ["/alpine/community/x86_64/APKINDEX.tar.gz", "/alpine/main/x86_64/..%2f..%2fmeta.db.apk", "/alpine/main/APKINDEX.tar.gz", "/alpine/main/x86_64/.hidden.apk", "/alpine/main/x86_64/README"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![("jq-1.8.2-r0".to_string(), 1)], "a missing index is not a wish; a missing package is");
+}
+
+#[test]
 fn maven_repositories_are_served_the_way_maven_asks_for_them() {
     let r = rig("m2", "maven", &[("org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar", b"jar"), ("org/slf4j/slf4j-api/maven-metadata.xml", b"<metadata/>")]);
     assert_eq!(get(&r, "/m2/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar").1, "jar");

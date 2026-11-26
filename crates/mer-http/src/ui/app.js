@@ -464,6 +464,13 @@ function clientSetupDialog(r) {
     if (r.private) add(secure ? "Token, in ~/.netrc (machine is host:port)" : "Token: go sends credentials only over HTTPS, so serve this repository with TLS", [
       `machine ${host} login go password <token>`,
     ]);
+  } else if (r.format === "apk") {
+    add("Use only the vault, in /etc/apk/repositories (one line per repository mirrored)", [
+      `${base}/main`, `${base}/community`,
+    ]);
+    add("Then", ["apk update", "apk add <package>"]);
+    blocks.push(h("p", { class: "muted" }, "The index is Alpine's own, still signed by Alpine, so the keys a client already has are all it needs. It lists packages that are not mirrored too: installing one of those fails with 404 and puts it on the wishlist."));
+    if (r.private) add("Token, in the repository line (any user name)", [`${base.replace("://", "://any:<token>@")}/main`]);
   } else if (r.format === "rpm") {
     add("Add the vault as a repository, in /etc/yum.repos.d/vault.repo", [
       "[vault]", "name=vault", `baseurl=${base}/`, "gpgcheck=1",

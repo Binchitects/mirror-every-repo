@@ -56,6 +56,14 @@ pub(crate) fn package_of(format: &str, path: &str) -> Option<(String, String)> {
             let at = stem.char_indices().find(|&(i, c)| c == '-' && looks_like_version(&stem[i + 1..])).map(|(i, _)| i)?;
             own(&stem[..at], &stem[at + 1..])
         }
+        "apk" => {
+            // main/x86_64/curl-8.23.0-r0.apk: the version is the last two
+            // hyphenated parts (8.23.0 and r0).
+            let stem = path.rsplit('/').next()?.strip_suffix(".apk")?;
+            let (rest, release) = stem.rsplit_once('-')?;
+            let (name, version) = rest.rsplit_once('-')?;
+            release.starts_with('r').then(|| own(name, &format!("{version}-{release}"))).flatten()
+        }
         "rpm" => {
             // Packages/c/curl-7.76.1-29.el9_4.x86_64.rpm: name-version-release.arch
             let stem = path.rsplit('/').next()?.strip_suffix(".rpm")?;
@@ -134,6 +142,8 @@ pub(crate) fn wish_hint(format: &str, wish: &str) -> Option<String> {
         "maven" => add("artifact", wish),
         // The file name of a missing package: curl-7.76.1-29.el9_4.x86_64
         "rpm" => package_of("rpm", &format!("{wish}.rpm")).and_then(|(n, _)| add("package", &n)),
+        // The file name of a missing package: jq-1.8.2-r0
+        "apk" => package_of("apk", &format!("x/x/{wish}.apk")).and_then(|(n, _)| add("package", &n)),
         "apt" => package_of("apt", wish).and_then(|(n, _)| add("package", &n)),
         _ => None,
     }
@@ -172,6 +182,10 @@ mod tests {
             ("rpm", "Packages/c/curl-7.76.1-29.el9_4.x86_64.rpm", Some(("curl", "7.76.1-29.el9_4"))),
             ("rpm", "Packages/g/glibc-gconv-extra-2.34-100.el9.x86_64.rpm", Some(("glibc-gconv-extra", "2.34-100.el9"))),
             ("rpm", "repodata/repomd.xml", None),
+            ("apk", "main/x86_64/curl-8.23.0-r0.apk", Some(("curl", "8.23.0-r0"))),
+            ("apk", "community/x86_64/py3-pip-25.1-r0.apk", Some(("py3-pip", "25.1-r0"))),
+            ("apk", "main/x86_64/lua5.4-5.4.8-r0.apk", Some(("lua5.4", "5.4.8-r0"))),
+            ("apk", "main/x86_64/APKINDEX.tar.gz", None),
             ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.pom", Some(("com.google.guava:guava", "33.3.1-jre"))),
             ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar", Some(("com.google.guava:guava", "33.3.1-jre"))),
             ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar.sha1", None),
@@ -199,11 +213,37 @@ mod tests {
             ("go", "github.com/google/uuid@v1.6.0", Some("--module=github.com/google/uuid@v1.6.0")),
             ("maven", "org.slf4j:slf4j-api:2.0.16", Some("--artifact=org.slf4j:slf4j-api:2.0.16")),
             ("rpm", "htop-3.3.0-1.el9.x86_64", Some("--package=htop")),
+            ("apk", "jq-1.8.2-r0", Some("--package=jq")),
+            ("apk", "py3-pip-25.1-r0", Some("--package=py3-pip")),
             ("apt", "pool/main/h/htop/htop_3.2.2-2_amd64.deb", Some("--package=htop")),
             ("raw", "tools/missing.tgz", None),
         ];
         for (format, wish, want) in cases {
             assert_eq!(wish_hint(format, wish).as_deref(), want, "{format} {wish}");
         }
+    }
+}
+
+#[cfg(test)]
+mod apk_names {
+    use super::*;
+
+    /// Every name and version in a real Alpine index survives the trip
+    /// through its file name, as a stored path and as a wish.
+    #[test]
+    fn real_alpine_packages_are_read_back_from_their_file_names() {
+        let raw = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../mer-format-apk/tests/oracle/APKINDEX.gz")).unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&raw[..]), &mut text).unwrap();
+        let mut n = 0;
+        for block in text.split("\n\n").filter(|b| !b.trim().is_empty()) {
+            let field = |k: &str| block.lines().find_map(|l| l.strip_prefix(k)).unwrap().to_string();
+            let (name, version) = (field("P:"), field("V:"));
+            let stem = format!("{name}-{version}");
+            assert_eq!(package_of("apk", &format!("main/x86_64/{stem}.apk")), Some((name.clone(), version.clone())), "{stem}");
+            assert_eq!(wish_hint("apk", &stem), Some(format!("--package={name}")), "{stem}");
+            n += 1;
+        }
+        assert!(n > 600, "{n}");
     }
 }

@@ -105,6 +105,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: HelmCmd,
     },
+    /// Alpine Linux repositories for apk (collector side).
+    Apk {
+        #[command(subcommand)]
+        cmd: ApkCmd,
+    },
     /// RPM repositories for yum and dnf (collector side).
     Rpm {
         #[command(subcommand)]
@@ -467,6 +472,49 @@ enum HelmCmd {
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum ApkCmd {
+    /// Mirror Alpine packages and what they need into a new snapshot of an apk repo.
+    Sync {
+        repo: String,
+        /// Repository, as in /etc/apk/repositories (repeatable; community
+        /// needs main): https://dl-cdn.alpinelinux.org/alpine/v3.24/main
+        #[arg(long = "upstream", required = true)]
+        upstreams: Vec<String>,
+        /// Package to mirror (repeatable). What it needs is added automatically.
+        #[arg(long = "package", short = 'p')]
+        packages: Vec<String>,
+        /// A file listing packages, one per line, as `apk info` or
+        /// /etc/apk/world give them (repeatable). Name what a client image
+        /// already has, so that `apk upgrade` works against the vault too.
+        #[arg(long = "packages-from")]
+        packages_from: Vec<PathBuf>,
+        /// Architecture (repeatable).
+        #[arg(long = "arch", default_values = ["x86_64"])]
+        arches: Vec<String>,
+        /// The trusted keys, as /etc/apk/keys of an Alpine machine: each
+        /// index must be signed by one of them.
+        #[arg(long)]
+        keys: Option<PathBuf>,
+        /// Additional host the collector may contact (repeatable).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+/// Package names from a list as `apk info` or /etc/apk/world give it.
+fn package_list(path: &Path) -> Result<Vec<String>> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(text
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|w| !w.starts_with('#') && !w.starts_with('!'))
+        // world entries may carry a version or a repository tag: curl>=8, curl@edge
+        .map(|w| mer_format_apk::bare(w).split('@').next().unwrap_or("").to_string())
+        .filter(|w| !w.is_empty())
+        .collect())
 }
 
 #[derive(Subcommand)]
@@ -1485,6 +1533,37 @@ fn main() -> Result<()> {
                     rep.reused,
                     rep.unverified
                 );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Apk { cmd } => match cmd {
+            ApkCmd::Sync { repo, upstreams, mut packages, packages_from, arches, keys, allow_hosts } => {
+                let st = open(&data)?;
+                for f in &packages_from {
+                    packages.extend(package_list(f)?);
+                }
+                packages.sort();
+                packages.dedup();
+                if packages.is_empty() {
+                    bail!("name a package (--package) or a list of them (--packages-from)");
+                }
+                let mut hosts = allow_hosts;
+                for u in &upstreams {
+                    hosts.push(mer_fetch::host_of(u).ok_or_else(|| anyhow!("{u:?} is not an http(s) URL"))?);
+                }
+                hosts.sort();
+                hosts.dedup();
+                let client = http_client(&hosts);
+                let cfg = mer_format_apk::ApkConfig { upstreams, packages, arches, keys };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.upstreams.join(", "), hosts.join(", "));
+                let rep = mer_format_apk::sync(&st, &repo, &client, &cfg)?;
+                println!("{} packages; downloaded {} ({}), {} already in the store", rep.packages, rep.downloaded, human(rep.downloaded_bytes), rep.reused);
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");
                 }

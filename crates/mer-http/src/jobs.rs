@@ -71,6 +71,14 @@ pub fn forms() -> Vec<(&'static str, &'static [&'static str], Vec<Field>)> {
             f("ignore_valid_until", Bool, false, "Accept an expired Release"),
             HOSTS,
         ]),
+        ("apk", &["apk", "sync"], vec![
+            f("upstream", UrlList, true, "Repositories as in /etc/apk/repositories (for example .../alpine/v3.24/main and .../community)"),
+            f("package", List, false, "Packages to mirror; what they need is added"),
+            f("packages_from", PathList, false, "Lists of packages, as `apk info` on a client image prints them"),
+            f("arch", List, false, "Architectures (default x86_64)"),
+            f("keys", Path, false, "Directory of trusted keys, as /etc/apk/keys"),
+            HOSTS,
+        ]),
         ("rpm", &["rpm", "sync"], vec![
             f("upstream", UrlList, true, "Repository base URLs (directories holding repodata/)"),
             f("package", List, true, "Packages to mirror; what they require is added"),

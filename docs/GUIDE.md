@@ -152,6 +152,23 @@ mer rpm sync rocky --keyring RPM-GPG-KEY-Rocky-9 \
 - `--arch` is repeatable (default `x86_64` and `noarch`).
 - Clients keep `gpgcheck=1` with the distribution key: packages are upstream's own, signatures included.
 
+### Alpine (apk)
+
+```text
+mer repo add alpine --format apk
+mer apk sync alpine --keys /etc/apk/keys \
+    --upstream https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
+    --upstream https://dl-cdn.alpinelinux.org/alpine/v3.24/community \
+    -p curl -p nginx --packages-from installed.txt
+```
+
+- `--upstream` is a repository as `/etc/apk/repositories` names it. Repeat it for main and community: community packages need main. Each keeps its own path on the vault (`alpine/main`, `alpine/community`).
+- `--keys` is a directory of Alpine's keys, as `/etc/apk/keys` on any Alpine machine. Each `APKINDEX.tar.gz` must be signed by one of them, and every package is checked against it, so everything traces back to Alpine's key. Without `--keys`, indexes are trusted on TLS alone.
+- What packages need is followed through names, `so:`, `cmd:` and `pc:` capabilities, as apk picks among providers. Packages apk installs by itself (install-if: docs, shell completions, OpenRC services) come along once what they wait for is mirrored.
+- The index is Alpine's own, unchanged, still signed by Alpine. Clients need no key from you, and `apk search` shows the whole repository. Installing a package that is not mirrored fails with 404, and the package lands on the vault's wishlist.
+- `--packages-from` reads a list of package names, as `apk info` prints them on a client image (or `/etc/apk/world`). Mirror what your images already have, and `apk upgrade` works from the vault too.
+- `--arch` is repeatable (default `x86_64`). Each index is a new snapshot when Alpine republishes it, which happens several times a day.
+
 ### PyPI
 
 ```text
@@ -370,6 +387,7 @@ Client configuration, with `vault:8080` as the package listener:
 |---|---|
 | apt | `deb [signed-by=/etc/apt/keyrings/site.asc] https://vault:8080/debian bookworm main`. Get the key once from `https://vault:8080/debian/keys/site.asc` or by hand. |
 | dnf, yum | A `.repo` file with `baseurl=https://vault:8080/rocky/`, `gpgcheck=1` and the distribution key. Install with `--disablerepo='*' --enablerepo=vault`, or disable the other repositories. |
+| apk | `/etc/apk/repositories` with `https://vault:8080/alpine/main` (and `.../community`) and nothing else. The keys the client has already check the index. |
 | pip | `pip install --index-url https://vault:8080/pypi/simple/ <package>`, or `index-url` in `pip.conf`. |
 | npm | `npm config set registry https://vault:8080/npm/`. Use `npm install --no-audit`: the vault has no audit service. |
 | dotnet | `dotnet nuget add source https://vault:8080/nuget/v3/index.json --name vault`, and remove the default source. Restore works; searching for packages does not. |
@@ -454,6 +472,7 @@ A token without `--repo` is valid for every repo. Clients send the token as a pa
 |---|---|
 | apt | `/etc/apt/auth.conf.d/vault.conf`: `machine https://vault:8080 login apt password <token>` |
 | dnf, yum | `username=any` and `password=<token>` in the `.repo` file |
+| apk | In the repository line: `https://any:<token>@vault:8080/alpine/main` |
 | pip | `index-url = https://token:<token>@vault:8080/pypi/simple/` |
 | npm | `.npmrc`: `//vault:8080/npm/:_authToken=<token>` |
 | dotnet | `dotnet nuget add source ... --username any --password <token> --store-password-in-clear-text` |
@@ -520,6 +539,9 @@ Garbage collection only removes content that has been unreferenced for the grace
 | go: an error about a newer Go toolchain | A module asks for a newer Go than the client has, and go tries to download one | `go env -w GOTOOLCHAIN=local`, and use an older version of that module or a newer Go |
 | dnf: `GPG check FAILED` or `public key ... is not installed` | The client does not have the distribution key | Point `gpgkey=` at the distribution's key file, which the distribution's own images ship in `/etc/pki/rpm-gpg/` |
 | `repomd.xml does not verify` on the collector | The keyring is not the key that signed the repository | Use the distribution's key for that release (for example `RPM-GPG-KEY-Rocky-9`) |
+| apk: `UNTRUSTED signature` on a client | The client does not have the key that signed the index | Use an Alpine image of the same release, or install `alpine-keys` |
+| `not signed by a trusted key` on the collector | `--keys` does not hold the key that signed the index | Copy `/etc/apk/keys` from an Alpine machine of that release |
+| apk: `ERROR: <package>: HTTP 404` | The package is not mirrored | It is on the wishlist; add it to the sync with `-p` |
 | mvn: `Could not resolve dependencies` or `Plugin ... could not be resolved` | The artifact or plugin is not mirrored | It is on the wishlist; build the project once on a connected machine and sync with `--from-m2` |
 | pip: `is not a trusted or secure host` | pip refuses plain HTTP indexes | Serve with TLS, or pass `--trusted-host` |
 | Sync warns `depends on X, which upstream does not provide` | A dependency could not be satisfied in that upstream | Usually harmless for optional items; otherwise add the upstream or component that has it |

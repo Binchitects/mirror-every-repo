@@ -2,6 +2,12 @@
 
 All notable changes to this project are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Formats
+
+- **Alpine (apk)**: packages mirrored from Alpine's main and community repositories with what they need, through names, `so:`, `cmd:` and `pc:` capabilities, apk's provider choice and install-if. Each `APKINDEX.tar.gz` is checked against Alpine's keys and served unchanged, so stock clients use the keys they have; every package is checked against it. A package that is not mirrored lands on the wishlist. `--packages-from` takes `apk info` output, so `apk upgrade` works from the vault. `mer apk sync`.
+
 ## [1.3.0] - 2026-11-26
 
 ### Web panel

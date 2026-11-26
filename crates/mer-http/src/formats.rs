@@ -368,6 +368,27 @@ fn rpm(raw: &str) -> Route {
     Route::Done(Reply::text(404, "not found\n"))
 }
 
+// ------------------------------------------------------------------- apk
+
+/// apk reads `<repository>/<arch>/APKINDEX.tar.gz`, then the packages it
+/// names, at `<repository>/<arch>/<name>-<version>.apk`. The index is
+/// Alpine's own and lists packages that are not mirrored, so asking for a
+/// missing package is a wish, named like the file: `jq-1.8.2-r0`.
+fn apk(raw: &str) -> Route {
+    let not_found = || Route::Done(Reply::text(404, "not found\n"));
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::text(400, "bad request\n")) };
+    let parts: Vec<&str> = path.split('/').collect();
+    let plain = |s: &str| !s.is_empty() && !s.starts_with('.') && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'+'));
+    match parts.as_slice() {
+        [repo, arch, "APKINDEX.tar.gz"] if plain(repo) && plain(arch) => Route::Mapped { path, wish: None },
+        [repo, arch, file] if plain(repo) && plain(arch) && plain(file) && file.ends_with(".apk") => {
+            let stem = file.trim_end_matches(".apk").to_string();
+            Route::Mapped { path, wish: Some(stem) }
+        }
+        _ => not_found(),
+    }
+}
+
 // ----------------------------------------------------------------- maven
 
 /// A Maven repository is plain files. A missing POM or artifact is a wish,
@@ -536,6 +557,7 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "go" => golang(app, repo, path),
         "helm" => helm(path),
         "rpm" => rpm(path),
+        "apk" => apk(path),
         "maven" => maven(path),
         _ => Route::Unhandled,
     }
