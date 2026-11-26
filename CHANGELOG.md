@@ -26,6 +26,7 @@ All notable changes to this project are recorded here. Versions follow [Semantic
 ### Collector
 
 - Requests that fail in transit, or that the server turns away for now (429, 502, 503, 504), are retried three times with growing waits.
+- Fixed: a sync could hang forever when an upstream (or a proxy) stopped answering on a reused connection, because the HTTP library drops a connection's timeouts when it reuses it. Every request now uses a fresh connection with its timeouts.
 
 - Proxies: the collector honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and says when it uses one.
 - `mer apt sync --allow-host` for mirrors that redirect downloads to another host.

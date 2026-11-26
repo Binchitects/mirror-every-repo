@@ -74,7 +74,13 @@ fn agent(proxy: Option<&str>) -> Result<ureq::Agent, FetchError> {
         .timeout_read(Duration::from_secs(120))
         .user_agent("mer-collector")
         // Redirects are followed here, one by one, against the allowlist.
-        .redirects(0);
+        .redirects(0)
+        // No connection reuse: ureq 2 clears a connection's timeouts when it
+        // goes back to the pool and does not set them again when it is
+        // reused, so a reused connection that stalls would block forever.
+        // A fresh connection per request always has its timeouts.
+        .max_idle_connections(0)
+        .max_idle_connections_per_host(0);
     if let Some(p) = proxy {
         let authority = p.strip_prefix("http://").or_else(|| p.strip_prefix("https://")).map(|r| r.trim_end_matches('/')).unwrap_or("");
         let hostport = authority.rsplit('@').next().unwrap_or("");

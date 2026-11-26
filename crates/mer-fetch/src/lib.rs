@@ -366,6 +366,36 @@ mod tests {
     }
 
     #[test]
+    fn a_server_that_stops_answering_on_a_second_request_does_not_hang_the_collector() {
+        // Answers the first request, then on the same connection reads the
+        // next request and never replies. A reused connection without its
+        // read timeout would wait here forever.
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for conn in listener.incoming().flatten() {
+                let mut reader = BufReader::new(conn.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let mut w = conn;
+                let _ = w.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok");
+                held.push(w); // keep it open and silent
+            }
+        });
+        let client = HttpClient::new(&[addr.to_string()]);
+        let started = std::time::Instant::now();
+        for _ in 0..2 {
+            let body = client.get(&format!("http://{addr}/x"), &[]).unwrap().bytes("x", 10).unwrap();
+            assert_eq!(body, b"ok");
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "each request used a fresh connection");
+    }
+
+    #[test]
     fn spec_selects_the_kind() {
         let dir = mirror();
         assert_eq!(upstream_from(dir.path().to_str().unwrap()).unwrap().describe(), dir.path().display().to_string());
