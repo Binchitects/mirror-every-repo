@@ -87,12 +87,11 @@ Install a vault or a collector with one command (as root):
 curl -fsSL https://github.com/$REPO/releases/download/$TAG/install.sh | bash -s -- vault
 \`\`\`
 
-Or pull the container image, or download the Linux binary below and check it against the \`.sha256\` file:
-
-\`\`\`bash
-docker pull $IMAGE_NAME:$VERSION
-\`\`\`
+Or download the Linux binary below (static, for any x86-64 Linux) and check it against the \`.sha256\` file.
 EOF
+if [ "$IMAGE" = 1 ]; then
+  printf '\nThe container image:\n\n```bash\ndocker pull %s:%s\n```\n' "$IMAGE_NAME" "$VERSION" >> "$WORK/notes.md"
+fi
 sed 's/^/  /' "$WORK/notes.md" | head -40
 
 if [ "$IMAGE" = 1 ]; then
