@@ -496,6 +496,36 @@ fn apk_repositories_are_served_the_way_apk_asks_for_them() {
 }
 
 #[test]
+fn gem_sources_are_served_the_way_gem_and_bundle_ask_for_them() {
+    let r = rig("gems", "gem", &[
+        ("versions", b"created_at: x\n---\nrack 3.2.9 abc\n"),
+        ("info/rack", b"---\n3.2.9 |checksum:00\n"),
+        ("gems/rack-3.2.9.gem", b"gem bytes"),
+        ("quick/Marshal.4.8/rack-3.2.9.gemspec.rz", b"x\x9cspec"),
+    ]);
+    assert_eq!(get(&r, "/gems/versions").1, "created_at: x\n---\nrack 3.2.9 abc\n");
+    assert_eq!(get(&r, "/gems/gems/rack-3.2.9.gem").1, "gem bytes");
+    assert_eq!(get(&r, "/gems/quick/Marshal.4.8/rack-3.2.9.gemspec.rz").0, 200);
+    // gem install starts with HEAD /versions.
+    let (status, _, _) = full(&r, "HEAD", "/gems/versions", &[]);
+    assert_eq!(status, 200);
+    // The index is always sent whole, so a client never appends a range of a
+    // changed file to its old copy; other files honour ranges.
+    let (status, body, hs) = full(&r, "GET", "/gems/info/rack", &[("Range", "bytes=5-")]);
+    assert_eq!((status, String::from_utf8(body).unwrap()), (200, "---\n3.2.9 |checksum:00\n".to_string()));
+    assert!(hs.iter().any(|(k, v)| k.eq_ignore_ascii_case("Repr-Digest") && v.starts_with("sha-256=:")), "{hs:?}");
+    assert_eq!(full(&r, "GET", "/gems/gems/rack-3.2.9.gem", &[("Range", "bytes=4-")]).0, 206);
+    for path in ["/gems/specs.4.8.gz", "/gems/api/v1/dependencies", "/gems/info/..%2fversions", "/gems/gems/.hidden.gem", "/gems/names"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(get(&r, "/gems/info/sinatra").0, 404);
+    assert_eq!(get(&r, "/gems/gems/puma-7.0.0.gem").0, 404);
+    let mut w = wishes(&r);
+    w.sort();
+    assert_eq!(w, vec![("puma-7.0.0".to_string(), 1), ("sinatra".to_string(), 1)]);
+}
+
+#[test]
 fn maven_repositories_are_served_the_way_maven_asks_for_them() {
     let r = rig("m2", "maven", &[("org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar", b"jar"), ("org/slf4j/slf4j-api/maven-metadata.xml", b"<metadata/>")]);
     assert_eq!(get(&r, "/m2/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar").1, "jar");

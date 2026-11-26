@@ -71,6 +71,15 @@ pub fn forms() -> Vec<(&'static str, &'static [&'static str], Vec<Field>)> {
             f("ignore_valid_until", Bool, false, "Accept an expired Release"),
             HOSTS,
         ]),
+        ("gem", &["gem", "sync"], vec![
+            f("upstream", Url, false, "Gem source (default https://rubygems.org)"),
+            f("gem", List, false, "Gems to mirror: rails, rails:~> 8.0, rack@3.2.9; what they depend on is added"),
+            f("lockfile", PathList, false, "Gemfile.lock files whose exact gems are mirrored"),
+            f("ruby", Text, false, "The Ruby inside the air gap, for example 3.4.1"),
+            f("platform", List, false, "Platforms besides pure Ruby (default x86_64-linux and x86_64-linux-gnu)"),
+            f("pre", Bool, false, "Let gems named without a requirement resolve to a prerelease"),
+            HOSTS,
+        ]),
         ("apk", &["apk", "sync"], vec![
             f("upstream", UrlList, true, "Repositories as in /etc/apk/repositories (for example .../alpine/v3.24/main and .../community)"),
             f("package", List, false, "Packages to mirror; what they need is added"),

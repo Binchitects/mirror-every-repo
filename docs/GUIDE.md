@@ -191,6 +191,19 @@ mer npm sync npm -p express -p "lodash@^4.17" -p "@types/node@20"
 - Dependencies, optional dependencies and non-optional peer dependencies are followed; development dependencies are not.
 - Packages built for another operating system or CPU are left out. `--os`, `--cpu` and `--libc` set the target (defaults `linux`, `x64`, `glibc`).
 
+### RubyGems
+
+```text
+mer repo add gems --format gem
+mer gem sync gems --ruby 3.4.1 -g sinatra -g "rails:~> 8.0" --lockfile Gemfile.lock
+```
+
+- `-g` names a gem: `rails` (newest release), `"rails:~> 8.0"` (a requirement), `rack@3.2.9` (exactly). Each requirement, the gem's own and those of its dependencies, resolves to its newest matching version on its own; this is not Bundler's solver, so a combination only an older version satisfies is not found. `--lockfile` sidesteps that: exactly what a `Gemfile.lock` names is mirrored.
+- `--ruby` is the Ruby inside the air gap. Versions that need another Ruby are left out, as Bundler would leave them out. Without it, any Ruby.
+- `--platform` (repeatable) is the platforms to keep besides pure Ruby, as Bundler names them (default `x86_64-linux` and `x86_64-linux-gnu`). Gems with precompiled builds (nokogiri, grpc, google-protobuf) are mirrored for those platforms and in their source form.
+- The vault serves the compact index (`/versions`, `/info/<gem>`) of exactly what is mirrored, with upstream's lines unchanged, so `gem install` and Bundler both see only gems they can get. `gem search` and the older Marshal indexes are not offered.
+- To make a `Gemfile.lock` on a connected machine for exactly the platforms inside, remove the others: `bundle lock --remove-platform aarch64-linux-gnu ...`.
+
 ### NuGet (.NET)
 
 ```text
@@ -387,6 +400,8 @@ Client configuration, with `vault:8080` as the package listener:
 |---|---|
 | apt | `deb [signed-by=/etc/apt/keyrings/site.asc] https://vault:8080/debian bookworm main`. Get the key once from `https://vault:8080/debian/keys/site.asc` or by hand. |
 | dnf, yum | A `.repo` file with `baseurl=https://vault:8080/rocky/`, `gpgcheck=1` and the distribution key. Install with `--disablerepo='*' --enablerepo=vault`, or disable the other repositories. |
+| gem | `gem install --clear-sources --source https://vault:8443/gems/ <gem>`, or for good `gem sources --remove https://rubygems.org/ --add https://vault:8443/gems/` |
+| bundle | `source "https://vault:8443/gems/"` in the Gemfile, or without changing Gemfiles `bundle config set --global mirror.https://rubygems.org https://vault:8443/gems/` |
 | apk | `/etc/apk/repositories` with `https://vault:8080/alpine/main` (and `.../community`) and nothing else. The keys the client has already check the index. |
 | pip | `pip install --index-url https://vault:8080/pypi/simple/ <package>`, or `index-url` in `pip.conf`. |
 | npm | `npm config set registry https://vault:8080/npm/`. Use `npm install --no-audit`: the vault has no audit service. |
@@ -473,6 +488,8 @@ A token without `--repo` is valid for every repo. Clients send the token as a pa
 | apt | `/etc/apt/auth.conf.d/vault.conf`: `machine https://vault:8080 login apt password <token>` |
 | dnf, yum | `username=any` and `password=<token>` in the `.repo` file |
 | apk | In the repository line: `https://any:<token>@vault:8080/alpine/main` |
+| bundle | `bundle config set --global https://vault:8443/gems/ any:<token>` |
+| gem | The token in the source URL: `--source https://any:<token>@vault:8443/gems/` |
 | pip | `index-url = https://token:<token>@vault:8080/pypi/simple/` |
 | npm | `.npmrc`: `//vault:8080/npm/:_authToken=<token>` |
 | dotnet | `dotnet nuget add source ... --username any --password <token> --store-password-in-clear-text` |
@@ -542,6 +559,8 @@ Garbage collection only removes content that has been unreferenced for the grace
 | apk: `UNTRUSTED signature` on a client | The client does not have the key that signed the index | Use an Alpine image of the same release, or install `alpine-keys` |
 | `not signed by a trusted key` on the collector | `--keys` does not hold the key that signed the index | Copy `/etc/apk/keys` from an Alpine machine of that release |
 | apk: `ERROR: <package>: HTTP 404` | The package is not mirrored | It is on the wishlist; add it to the sync with `-p` |
+| bundle: `Could not find gem 'x' in rubygems repository` | The gem, or a version that fits, is not mirrored | It is on the wishlist; add it with `-g`, or sync the project's `Gemfile.lock` with `--lockfile` |
+| bundle: a gem needs a native build that fails | The precompiled build for that platform is not mirrored | Add the platform with `--platform` (as `bundle platform` names it) |
 | mvn: `Could not resolve dependencies` or `Plugin ... could not be resolved` | The artifact or plugin is not mirrored | It is on the wishlist; build the project once on a connected machine and sync with `--from-m2` |
 | pip: `is not a trusted or secure host` | pip refuses plain HTTP indexes | Serve with TLS, or pass `--trusted-host` |
 | Sync warns `depends on X, which upstream does not provide` | A dependency could not be satisfied in that upstream | Usually harmless for optional items; otherwise add the upstream or component that has it |

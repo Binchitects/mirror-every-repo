@@ -396,6 +396,10 @@ fn panel_files_are_served_with_a_strict_content_policy() {
     // (The SVG namespace is a name, not an address: nothing is fetched from it.)
     assert_eq!(js.matches("http://").count(), 1);
     let js = js.replace("\"http://www.w3.org/2000/svg\"", "");
+    // (The gem setup snippet names rubygems.org as text, because Bundler's
+    // mirror setting is keyed by that URL; the panel never fetches it.)
+    assert_eq!(js.matches("https://").count(), js.matches("https://rubygems.org").count());
+    let js = js.replace("https://rubygems.org", "");
     for file in [&js, &page.text, &c.get("/ui/app.css").text] {
         assert!(!file.contains("http://") && !file.contains("https://"), "external reference in a panel file");
     }
@@ -837,6 +841,8 @@ fn every_format_turns_a_real_miss_into_what_to_add() {
         ("charts", "helm", "/charts/charts/cert-manager-v1.16.1.tgz", "--chart=cert-manager@v1.16.1"),
         ("el9", "rpm", "/el9/Packages/h/htop-3.3.0-1.el9.x86_64.rpm", "--package=htop"),
         ("alp", "apk", "/alp/main/x86_64/jq-1.8.2-r0.apk", "--package=jq"),
+        ("rb", "gem", "/rb/info/sinatra", "--gem=sinatra"),
+        ("rb", "gem", "/rb/gems/nokogiri-1.19.7-x86_64-linux-gnu.gem", "--gem=nokogiri@1.19.7"),
         ("m2", "maven", "/m2/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar", "--artifact=org.slf4j:slf4j-api:2.0.16"),
         ("img", "oci", "/v2/img/library/busybox/manifests/1.37", "--image=library/busybox:1.37"),
         ("deb", "apt", "/deb/pool/main/h/htop/htop_3.2.2-2_amd64.deb", "--package=htop"),

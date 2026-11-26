@@ -6,7 +6,7 @@
 
 **Package repositories for networks that have no internet.**
 
-`mirror-every-repo` keeps apt, RPM (yum/dnf), Alpine (apk), PyPI, npm, NuGet, Maven, Cargo, Go module, Helm chart and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `dnf`, `apk`, `pip`, `npm`, `dotnet`, `mvn`, `cargo`, `go`, `helm` and `docker` clients.
+`mirror-every-repo` keeps apt, RPM (yum/dnf), Alpine (apk), PyPI, npm, RubyGems, NuGet, Maven, Cargo, Go module, Helm chart and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `dnf`, `apk`, `pip`, `npm`, `gem`, `bundle`, `dotnet`, `mvn`, `cargo`, `go`, `helm` and `docker` clients.
 
 It is one binary, `mer`, written in Rust, shipped as a container image.
 
@@ -39,7 +39,7 @@ General repository managers assume both sides can talk to each other. An air gap
 
 | | |
 |---|---|
-| **Formats** | apt (Debian, Ubuntu), RPM (RHEL, Rocky, AlmaLinux, Fedora), Alpine (apk), PyPI, npm, NuGet (.NET), Maven (Java, Kotlin, Scala), Cargo (Rust), Go modules, Helm charts, container images (OCI and Docker), plain files |
+| **Formats** | apt (Debian, Ubuntu), RPM (RHEL, Rocky, AlmaLinux, Fedora), Alpine (apk), PyPI, npm, RubyGems, NuGet (.NET), Maven (Java, Kotlin, Scala), Cargo (Rust), Go modules, Helm charts, container images (OCI and Docker), plain files |
 | **Transfer** | Removable media volumes sized to the medium; one-way UDP with RaptorQ error correction for data diodes |
 | **Integrity** | Ed25519-signed bundles with k-of-n signers, a Merkle proof per segment, SHA-256 content addressing, upstream hashes and signatures checked before anything enters a snapshot |
 | **Control** | Quarantine with review of what would change, approve or reject, atomic publish, instant rollback, hash-chained audit log |
@@ -177,6 +177,7 @@ What the collector trusts upstream depends on the format:
 |---|---|---|
 | apt | The archive signing key | Signature on the release file; every index and package against the signed hashes |
 | RPM | The distribution key, through `repomd.xml.asc` (or TLS when no key is given) | Every metadata file against `repomd.xml`, every package against its SHA-256; clients check package signatures |
+| RubyGems | The TLS connection to the gem source | Every `.gem` against the SHA-256 in the compact index |
 | Alpine | Alpine's keys, through the signature on `APKINDEX.tar.gz` (or TLS when no keys are given) | Every package against the signed index: its size, the SHA-1 of its control section, the SHA-256 of its contents; clients check the same index with their own keys |
 | PyPI | TLS to the index | Every file against the SHA-256 the index states |
 | npm | TLS to the registry | Every tarball against the registry integrity hash |
@@ -229,7 +230,7 @@ bash scripts/dcargo.sh clippy --workspace --all-targets -- -D warnings
 bash deploy/demo.sh
 ```
 
-The code is a Cargo workspace of small crates (`crates/`), built with Rust 1.99. Version logic for each ecosystem is tested against truth tables generated from that ecosystem's reference implementation (`dpkg`, Python's `packaging`, npm's `semver`, `NuGet.Versioning`); the generators are next to the tables in `crates/*/tests/`. Cargo requirements are matched with the `semver` crate, the library Cargo itself uses. Go version ordering and `h1:` hashes are checked against `golang.org/x/mod` and the `go` command, RPM versions against `rpm`, Alpine versions and dependency choices against `apk`, Maven versions against Maven's `ComparableVersion`.
+The code is a Cargo workspace of small crates (`crates/`), built with Rust 1.99. Version logic for each ecosystem is tested against truth tables generated from that ecosystem's reference implementation (`dpkg`, Python's `packaging`, npm's `semver`, `NuGet.Versioning`); the generators are next to the tables in `crates/*/tests/`. Cargo requirements are matched with the `semver` crate, the library Cargo itself uses. Go version ordering and `h1:` hashes are checked against `golang.org/x/mod` and the `go` command, RPM versions against `rpm`, Alpine versions and dependency choices against `apk`, gem versions and requirements against RubyGems, Maven versions against Maven's `ComparableVersion`.
 
 Every push to `main` runs lint, the test suite and an end-to-end demo. Pushing a tag `vX.Y.Z` builds and publishes the container image, the binary and the GitHub Release.
 

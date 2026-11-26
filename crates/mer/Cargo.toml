@@ -31,6 +31,7 @@ mer-format-helm.workspace = true
 mer-format-rpm.workspace = true
 mer-format-maven.workspace = true
 mer-format-apk.workspace = true
+mer-format-gem.workspace = true
 mer-ldap.workspace = true
 mer-http.workspace = true
 mer-auth.workspace = true

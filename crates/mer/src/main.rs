@@ -105,6 +105,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: HelmCmd,
     },
+    /// RubyGems sources for gem and bundle (collector side).
+    Gem {
+        #[command(subcommand)]
+        cmd: GemCmd,
+    },
     /// Alpine Linux repositories for apk (collector side).
     Apk {
         #[command(subcommand)]
@@ -469,6 +474,38 @@ enum HelmCmd {
         charts: Vec<String>,
         /// Additional host the collector may contact (repeatable), for
         /// repositories that keep chart files elsewhere (github.com releases).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum GemCmd {
+    /// Mirror gems and what they depend on into a new snapshot of a gem repo.
+    Sync {
+        repo: String,
+        /// The gem source.
+        #[arg(long, default_value = "https://rubygems.org")]
+        upstream: String,
+        /// Gem to mirror (repeatable): rails (newest), "rails:~> 8.0", rack@3.2.9.
+        #[arg(long = "gem", short = 'g')]
+        gems: Vec<String>,
+        /// A Gemfile.lock whose exact gems are mirrored (repeatable), so that
+        /// `bundle install` of that project works inside the air gap.
+        #[arg(long = "lockfile")]
+        lockfiles: Vec<PathBuf>,
+        /// The Ruby inside the air gap, for example 3.4.1: gems that need
+        /// another Ruby are left out. Without it, any Ruby.
+        #[arg(long)]
+        ruby: Option<String>,
+        /// Platform to keep besides pure Ruby (repeatable), as Bundler names
+        /// them: x86_64-linux, x86_64-linux-gnu, aarch64-linux-musl, arm64-darwin.
+        #[arg(long = "platform", default_values = ["x86_64-linux", "x86_64-linux-gnu"])]
+        platforms: Vec<String>,
+        /// Let gems named without a requirement resolve to a prerelease.
+        #[arg(long)]
+        pre: bool,
+        /// Additional host the collector may contact (repeatable).
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
@@ -1533,6 +1570,27 @@ fn main() -> Result<()> {
                     rep.reused,
                     rep.unverified
                 );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Gem { cmd } => match cmd {
+            GemCmd::Sync { repo, upstream, gems, lockfiles, ruby, platforms, pre, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                hosts.push(mer_fetch::host_of(&upstream).ok_or_else(|| anyhow!("{upstream:?} is not an http(s) URL"))?);
+                hosts.sort();
+                hosts.dedup();
+                let client = http_client(&hosts);
+                let cfg = mer_format_gem::GemConfig { upstream, gems, lockfiles, ruby, platforms, pre };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.upstream, hosts.join(", "));
+                let rep = mer_format_gem::sync(&st, &repo, &client, &cfg)?;
+                println!("{} gems; downloaded {} ({}), {} already in the store", rep.gems, rep.downloaded, human(rep.downloaded_bytes), rep.reused);
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");
                 }

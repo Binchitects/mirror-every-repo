@@ -464,6 +464,11 @@ function clientSetupDialog(r) {
     if (r.private) add(secure ? "Token, in ~/.netrc (machine is host:port)" : "Token: go sends credentials only over HTTPS, so serve this repository with TLS", [
       `machine ${host} login go password <token>`,
     ]);
+  } else if (r.format === "gem") {
+    add("Bundler: in the Gemfile", [`source "${base}/"`]);
+    add("Or everything through the vault, without changing Gemfiles", [`bundle config set --global mirror.https://rubygems.org ${base}/`]);
+    add("gem install", [`gem install --clear-sources --source ${base}/ <gem>`, `# or for good: gem sources --remove https://rubygems.org/ --add ${base}/`]);
+    if (r.private) add("Token (any user name)", [`bundle config set --global ${base}/ any:<token>`, `gem install --clear-sources --source ${base.replace("://", "://any:<token>@")}/ <gem>`]);
   } else if (r.format === "apk") {
     add("Use only the vault, in /etc/apk/repositories (one line per repository mirrored)", [
       `${base}/main`, `${base}/community`,

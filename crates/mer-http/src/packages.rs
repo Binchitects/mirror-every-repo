@@ -104,6 +104,7 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool, via_v2: bool
     // For formats with their own request conventions, only what the format
     // handler recognises as a package request is a wish. Stray paths are not.
     let mut record_wish = matches!(repo_row.format.as_str(), "raw" | "apt");
+    let mut whole = false;
     match formats::route(app, req, tls, &repo_row, path) {
         formats::Route::Unhandled => {}
         formats::Route::Done(reply) => return reply,
@@ -112,6 +113,12 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool, via_v2: bool
             candidates = vec![path];
             record_wish = wish.is_some();
             wish_as = wish;
+        }
+        formats::Route::Whole { path, wish } => {
+            candidates = vec![path];
+            record_wish = wish.is_some();
+            wish_as = wish;
+            whole = true;
         }
     }
     let mut entry: Option<EntryRec> = None;
@@ -149,12 +156,15 @@ pub(crate) fn serve(app: &App, req: &Request, raw: &str, tls: bool, via_v2: bool
     let mut headers = vec![
         ("Content-Type", content_type(&entry.path).to_string()),
         ("ETag", etag.clone()),
-        ("Accept-Ranges", "bytes".to_string()),
+        // RFC 9530: the SHA-256 of the whole file, which clients can check
+        // what they assemble against (Bundler does).
+        ("Repr-Digest", format!("sha-256=:{}:", base64::engine::general_purpose::STANDARD.encode(entry.digest.as_bytes()))),
+        ("Accept-Ranges", if whole { "none" } else { "bytes" }.to_string()),
     ];
     if header(req, "If-None-Match").is_some_and(|v| v.split(',').any(|t| t.trim() == etag || t.trim() == "*")) {
         return Reply::empty(304, headers);
     }
-    let range = match header(req, "Range").map(|v| parse_range(v, entry.size)) {
+    let range = match header(req, "Range").filter(|_| !whole).map(|v| parse_range(v, entry.size)) {
         Some(Err(())) => {
             return Reply::empty(416, vec![("Content-Range", format!("bytes */{}", entry.size))]);
         }

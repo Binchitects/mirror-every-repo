@@ -21,6 +21,10 @@ pub(crate) enum Route {
     /// Serve `path` instead. If it is missing, record `wish` on the wishlist
     /// (`None`: a miss here is not a wish).
     Mapped { path: String, wish: Option<String> },
+    /// As `Mapped`, but always the whole file, whatever `Range` asks: for
+    /// indexes that change between snapshots, where a client appending a
+    /// range to its old copy would end up with neither version.
+    Whole { path: String, wish: Option<String> },
 }
 
 /// PEP 503 name normalisation: lower-case, runs of `-`, `_`, `.` become `-`.
@@ -389,6 +393,34 @@ fn apk(raw: &str) -> Route {
     }
 }
 
+// ------------------------------------------------------------------- gem
+
+/// `gem install` and Bundler read the compact index (`HEAD`/`GET versions`,
+/// then `info/<gem>`), then `gems/<gem>-<version>.gem`; `gem install` also
+/// reads `quick/Marshal.4.8/<gem>-<version>.gemspec.rz`. The index files are
+/// the vault's own and change between snapshots, so they are always sent
+/// whole: Bundler appends a range to its cached copy otherwise. Asking for
+/// a gem that is not mirrored is a wish; the older Marshal indexes
+/// (`specs.4.8.gz`) and the dependency API are not offered.
+fn gem(raw: &str) -> Route {
+    let not_found = || Route::Done(Reply::text(404, "not found\n"));
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::text(400, "bad request\n")) };
+    let plain = |s: &str| !s.is_empty() && s.len() <= 200 && !s.starts_with(['.', '-']) && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    if path == "versions" {
+        return Route::Whole { path, wish: None };
+    }
+    if let Some(name) = path.strip_prefix("info/") {
+        return if plain(name) { Route::Whole { wish: Some(name.to_string()), path } } else { not_found() };
+    }
+    if let Some(file) = path.strip_prefix("gems/").and_then(|f| f.strip_suffix(".gem")) {
+        return if plain(file) { Route::Mapped { wish: Some(file.to_string()), path } } else { not_found() };
+    }
+    match path.strip_prefix("quick/Marshal.4.8/").and_then(|f| f.strip_suffix(".gemspec.rz")) {
+        Some(file) if plain(file) => Route::Mapped { path, wish: None },
+        _ => not_found(),
+    }
+}
+
 // ----------------------------------------------------------------- maven
 
 /// A Maven repository is plain files. A missing POM or artifact is a wish,
@@ -558,6 +590,7 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "helm" => helm(path),
         "rpm" => rpm(path),
         "apk" => apk(path),
+        "gem" => gem(path),
         "maven" => maven(path),
         _ => Route::Unhandled,
     }

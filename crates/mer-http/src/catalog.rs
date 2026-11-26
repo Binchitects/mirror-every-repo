@@ -56,6 +56,13 @@ pub(crate) fn package_of(format: &str, path: &str) -> Option<(String, String)> {
             let at = stem.char_indices().find(|&(i, c)| c == '-' && looks_like_version(&stem[i + 1..])).map(|(i, _)| i)?;
             own(&stem[..at], &stem[at + 1..])
         }
+        "gem" => {
+            // gems/nokogiri-1.19.7-x86_64-linux-gnu.gem, gems/http-2-1.0.0.gem:
+            // the version starts at the first "-<digit>" after which a version
+            // (and a platform, which starts with a letter) follows.
+            let stem = path.strip_prefix("gems/")?.strip_suffix(".gem")?;
+            gem_split(stem).map(|(n, v)| (n.to_string(), v.to_string()))
+        }
         "apk" => {
             // main/x86_64/curl-8.23.0-r0.apk: the version is the last two
             // hyphenated parts (8.23.0 and r0).
@@ -101,6 +108,46 @@ pub(crate) fn package_of(format: &str, path: &str) -> Option<(String, String)> {
     }
 }
 
+/// `name-version[-platform]` into the gem name and `version[-platform]`.
+///
+/// Gem names may hold "-<digit>" (`http-2`), versions may hold hyphens
+/// (`1.0.0-beta.1`) and platforms dots (`universal-java-1.8`), so each
+/// place a version could start is ranked: best a version and a platform
+/// that starts with a known CPU or platform word, then a plain version,
+/// then a version with hyphens. The earliest of the best kind wins.
+fn gem_split(stem: &str) -> Option<(&str, &str)> {
+    let b = stem.as_bytes();
+    let version_like = |v: &str| !v.is_empty() && v.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'.') && !v.ends_with('.') && !v.contains("..");
+    let mut best: Option<(u8, usize)> = None;
+    for i in 2..b.len() {
+        if b[i - 1] != b'-' || !b[i].is_ascii_digit() {
+            continue;
+        }
+        let rest = &stem[i..];
+        let rank = match rest.split_once('-') {
+            None if version_like(rest) => 2,
+            Some((v, platform)) if version_like(v) && known_platform(platform) => 3,
+            Some(_) if rest.split('-').all(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'.')) => 1,
+            _ => 0,
+        };
+        if rank > 0 && best.is_none_or(|(r, _)| rank > r) {
+            best = Some((rank, i));
+        }
+    }
+    best.map(|(_, i)| (&stem[..i - 1], &stem[i..]))
+}
+
+/// Whether a platform starts as RubyGems platforms do: a CPU (`x86_64`,
+/// `arm64`, `universal`) or a platform of its own (`java`, `mswin32`).
+fn known_platform(p: &str) -> bool {
+    let first = p.split(['-', '.']).next().unwrap_or("");
+    const WORDS: &[&str] = &[
+        "x86", "x86_64", "x64", "amd64", "i386", "i486", "i586", "i686", "arm", "arm64", "aarch64", "universal", "sparc", "sparcv9", "powerpc", "ppc",
+        "ppc64", "ppc64le", "s390", "s390x", "riscv64", "loongarch64", "java", "jruby", "dalvik", "dotnet", "mswin32", "mswin64", "mingw32", "cygwin",
+    ];
+    WORDS.contains(&first) || first.starts_with("armv") || first.starts_with("mips")
+}
+
 fn go_unescape(s: &str) -> String {
     let mut out = String::new();
     let mut bang = false;
@@ -142,6 +189,11 @@ pub(crate) fn wish_hint(format: &str, wish: &str) -> Option<String> {
         "maven" => add("artifact", wish),
         // The file name of a missing package: curl-7.76.1-29.el9_4.x86_64
         "rpm" => package_of("rpm", &format!("{wish}.rpm")).and_then(|(n, _)| add("package", &n)),
+        // A gem asked for by name (info/<gem>) or as a file (<gem>-<version>).
+        "gem" => match gem_split(wish) {
+            Some((n, v)) => add("gem", &format!("{n}@{}", v.split('-').next().unwrap_or(v))),
+            None => add("gem", wish),
+        },
         // The file name of a missing package: jq-1.8.2-r0
         "apk" => package_of("apk", &format!("x/x/{wish}.apk")).and_then(|(n, _)| add("package", &n)),
         "apt" => package_of("apt", wish).and_then(|(n, _)| add("package", &n)),
@@ -186,6 +238,12 @@ mod tests {
             ("apk", "community/x86_64/py3-pip-25.1-r0.apk", Some(("py3-pip", "25.1-r0"))),
             ("apk", "main/x86_64/lua5.4-5.4.8-r0.apk", Some(("lua5.4", "5.4.8-r0"))),
             ("apk", "main/x86_64/APKINDEX.tar.gz", None),
+            ("gem", "gems/rack-3.2.9.gem", Some(("rack", "3.2.9"))),
+            ("gem", "gems/nokogiri-1.19.7-x86_64-linux-gnu.gem", Some(("nokogiri", "1.19.7-x86_64-linux-gnu"))),
+            ("gem", "gems/http-2-1.0.0.gem", Some(("http-2", "1.0.0"))),
+            ("gem", "info/rack", None),
+            ("gem", "versions", None),
+            ("gem", "quick/Marshal.4.8/rack-3.2.9.gemspec.rz", None),
             ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.pom", Some(("com.google.guava:guava", "33.3.1-jre"))),
             ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar", Some(("com.google.guava:guava", "33.3.1-jre"))),
             ("maven", "com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar.sha1", None),
@@ -214,6 +272,8 @@ mod tests {
             ("maven", "org.slf4j:slf4j-api:2.0.16", Some("--artifact=org.slf4j:slf4j-api:2.0.16")),
             ("rpm", "htop-3.3.0-1.el9.x86_64", Some("--package=htop")),
             ("apk", "jq-1.8.2-r0", Some("--package=jq")),
+            ("gem", "sinatra", Some("--gem=sinatra")),
+            ("gem", "nokogiri-1.19.7-x86_64-linux-gnu", Some("--gem=nokogiri@1.19.7")),
             ("apk", "py3-pip-25.1-r0", Some("--package=py3-pip")),
             ("apt", "pool/main/h/htop/htop_3.2.2-2_amd64.deb", Some("--package=htop")),
             ("raw", "tools/missing.tgz", None),
@@ -221,6 +281,29 @@ mod tests {
         for (format, wish, want) in cases {
             assert_eq!(wish_hint(format, wish).as_deref(), want, "{format} {wish}");
         }
+    }
+}
+
+#[cfg(test)]
+mod gem_names {
+    use super::*;
+
+    /// Real gem names, versions and platforms (tests/names.txt of the gem
+    /// format, from rubygems.org) survive the trip through their file names.
+    #[test]
+    fn real_gems_are_read_back_from_their_file_names() {
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../mer-format-gem/tests/names.txt")).unwrap();
+        let mut wrong = Vec::new();
+        for line in text.lines() {
+            let (name, full) = line.split_once(' ').unwrap();
+            let path = format!("gems/{name}-{full}.gem");
+            if package_of("gem", &path) != Some((name.to_string(), full.to_string())) {
+                wrong.push(format!("{path}: {:?}", package_of("gem", &path)));
+            }
+        }
+        // A version whose hyphenated part reads as a version of its own
+        // (pico_phone 0.9.0.pre.ca1-4d668159) cannot be told from a name; one does.
+        assert!(wrong.len() <= 1, "{} of {} wrong:\n{}", wrong.len(), text.lines().count(), wrong.join("\n"));
     }
 }
 

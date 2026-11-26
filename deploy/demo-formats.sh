@@ -19,6 +19,8 @@ GO="docker compose exec -T goclient"
 HELM="docker compose exec -T helmclient"
 RPM="docker compose exec -T rpmclient"
 APK="docker compose exec -T apkclient"
+RB="docker compose exec -T rubyclient"
+RBB="docker compose exec -T rubybuild"
 MB="docker compose exec -T mavenbuild"
 MVN="docker compose exec -T mavenclient"
 step() { printf '\n=== %s ===\n' "$*"; }
@@ -251,7 +253,7 @@ case "$OUT" in *"hello from the vault"*) ok "installed from the vault with signa
 if $RPM dnf -y -q --disablerepo='*' --enablerepo=vault install vim-enhanced >/dev/null 2>&1; then fail "vim was installable although it is not mirrored"
 else ok "a package that is not mirrored cannot be installed"; fi
 
-step "19. Alpine: mirror 'curl' and what a stock Alpine image has installed, from Alpine 3.24 main, checked against Alpine's keys"
+step "19. Alpine: mirror 'curl', 'fzf' (community) and what a stock Alpine image has installed, from Alpine 3.24 main and community, checked against Alpine's keys"
 $C mer repo add alpine --format apk
 # The collector trusts the keys an Alpine machine has, and mirrors what the
 # client image has installed too, so that apk upgrade works from the vault.
@@ -261,17 +263,21 @@ docker compose cp /tmp/mer-apk-keys collector:/tmp/apk-keys >/dev/null
 rm -rf /tmp/mer-apk-keys
 $APK apk info 2>/dev/null | $C sh -c 'cat > /tmp/apk-installed'
 $C mer apk sync alpine --keys /tmp/apk-keys --upstream https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
-  -p curl --packages-from /tmp/apk-installed | grep -v "^  WARNING" | tail -3
+  --upstream https://dl-cdn.alpinelinux.org/alpine/v3.24/community \
+  -p curl -p fzf --packages-from /tmp/apk-installed | grep -v "^  WARNING" | tail -3
 carry
 
 step "20. Alpine: install and upgrade with a stock apk that can only reach the vault, with the keys it already has"
 $APK timeout 5 wget -q -O /dev/null https://dl-cdn.alpinelinux.org/ 2>/dev/null && fail "apk client can reach the internet" || ok "apk client cannot reach the internet"
-$APK sh -c 'echo http://vault:8080/alpine/main > /etc/apk/repositories'
+$APK sh -c 'printf "http://vault:8080/alpine/main\nhttp://vault:8080/alpine/community\n" > /etc/apk/repositories'
 $APK sh -c 'command -v curl' >/dev/null 2>&1 && fail "curl is already installed" || ok "curl is not installed yet"
 $APK apk update 2>&1 | tail -1 | sed 's/^/  | /'
 $APK apk add curl 2>&1 | tail -2 | sed 's/^/  | /'
-OUT=$($APK curl --version 2>&1 | head -1 | tr -d '\r')
+OUT=$($APK curl --version 2>&1 | tr -d '\r')
+OUT=${OUT%%$'\n'*}
 case "$OUT" in curl\ *) ok "installed from the vault, index signed by Alpine: $OUT" ;; *) echo "$OUT"; fail "curl did not run" ;; esac
+$APK apk add fzf 2>&1 | tail -1 | sed 's/^/  | /'
+$APK fzf --version >/dev/null 2>&1 && ok "fzf installed from the vault's copy of community" || fail "fzf did not install from community"
 $APK apk upgrade 2>&1 | tail -1 | sed 's/^/  | /'
 $APK apk upgrade --simulate 2>&1 | grep -q "Upgrading" && fail "apk upgrade left packages behind" || ok "apk upgrade brought the image up to date from the vault"
 if $APK apk add jq >/dev/null 2>&1; then fail "jq was installable although it is not mirrored"
@@ -339,14 +345,52 @@ if $MVN sh -c 'cd /tmp/app && mvn -B -q package' >/dev/null 2>&1; then fail "slf
 else ok "an artifact that is not mirrored cannot be used"; fi
 case "$($V mer wishlist)" in *"org.slf4j:slf4j-api:2.0.16"*) ok "the request for slf4j-api is on the wishlist" ;; *) $V mer wishlist; fail "slf4j-api is not on the wishlist" ;; esac
 
-step "23. Containers: mirror 'alpine:3.20' from Docker Hub"
+step "23. RubyGems: mirror 'sinatra' and 'puma', and exactly what a connected machine's Gemfile.lock names"
+# A project locked on a connected machine: nokogiri, with its build for this platform.
+$RBB sh -c 'mkdir -p /app && cd /app && printf "source \"https://rubygems.org\"\ngem \"nokogiri\"\ngem \"rack\"\n" > Gemfile && bundle lock >/dev/null 2>&1 \
+  && others=$(sed -n "/^PLATFORMS/,/^$/p" Gemfile.lock | sed "1d;/^$/d;s/ //g" | grep -vx "x86_64-linux-gnu\|ruby" | tr "\n" " ") \
+  && { [ -z "$others" ] || bundle lock --remove-platform $others >/dev/null; }' || fail "the connected machine could not lock the project"
+docker compose cp rubybuild:/app/Gemfile.lock /tmp/mer-demo-Gemfile.lock >/dev/null
+docker compose cp /tmp/mer-demo-Gemfile.lock collector:/tmp/Gemfile.lock >/dev/null
+rm -f /tmp/mer-demo-Gemfile.lock
+RUBYV=$($RB ruby -e 'print RUBY_VERSION' | tr -d '\r')
+$C mer repo add gems --format gem
+$C mer gem sync gems --ruby "$RUBYV" -g sinatra -g puma --lockfile /tmp/Gemfile.lock | grep -v "^  WARNING" | tail -3
+carry
+
+step "24. RubyGems: gem install and bundle install with stock Ruby tools that can only reach the vault"
+$RB timeout 5 ruby -rsocket -e 'TCPSocket.new("1.1.1.1", 443)' 2>/dev/null && fail "ruby client can reach the internet" || ok "ruby client cannot reach the internet"
+$RB gem install --no-document --clear-sources --source http://vault:8080/gems/ sinatra 2>&1 | tail -1 | sed 's/^/  | /'
+OUT=$($RB ruby -e 'require "sinatra/base"; puts Sinatra::VERSION' 2>&1 | tr -d '\r')
+case "$OUT" in [0-9]*) ok "gem install from the vault: sinatra $OUT" ;; *) echo "$OUT"; fail "sinatra did not load" ;; esac
+$RB sh -c 'mkdir -p /app && cat > /app/Gemfile' <<'RUBY'
+source "http://vault:8080/gems/"
+gem "nokogiri"
+gem "rack"
+RUBY
+docker compose cp rubybuild:/app/Gemfile.lock /tmp/mer-demo-Gemfile.lock >/dev/null
+docker compose cp /tmp/mer-demo-Gemfile.lock rubyclient:/app/Gemfile.lock >/dev/null
+rm -f /tmp/mer-demo-Gemfile.lock
+$RB sh -c 'cd /app && sed -i "s|remote: https://rubygems.org/|remote: http://vault:8080/gems/|" Gemfile.lock && bundle install 2>&1 | tail -1' | sed 's/^/  | /'
+OUT=$($RB sh -c 'cd /app && bundle exec ruby -e "require \"nokogiri\"; puts Nokogiri::VERSION; puts Nokogiri::HTML(\"<p>hello from the vault</p>\").text"' 2>&1 | tr -d '\r')
+case "$OUT" in *"hello from the vault"*) ok "bundle install of the locked project, precompiled nokogiri $(echo "$OUT" | head -1)" ;; *) echo "$OUT"; fail "the locked project did not install" ;; esac
+# Bundler keeps a copy of the vault's index; a new snapshot changes it.
+$C mer gem sync gems --ruby "$RUBYV" -g sinatra -g puma -g rake --lockfile /tmp/Gemfile.lock | grep -v "^  WARNING" | tail -1
+carry
+$RB sh -c 'mkdir -p /app2 && cd /app2 && printf "source \"http://vault:8080/gems/\"\ngem \"rake\"\ngem \"rack\"\n" > Gemfile && bundle install 2>&1 | tail -1' | sed 's/^/  | /'
+$RB sh -c 'cd /app2 && bundle exec rake --version' >/dev/null 2>&1 && ok "after a new snapshot, Bundler's kept index is replaced, not patched: rake installs" || fail "bundle install failed after the index changed"
+if $RB gem install --no-document --clear-sources --source http://vault:8080/gems/ rails >/dev/null 2>&1; then fail "rails was installable although it is not mirrored"
+else ok "a gem that is not mirrored cannot be installed"; fi
+case "$($V mer wishlist)" in *"gems  rails"*) ok "rails is on the wishlist" ;; *) $V mer wishlist; fail "rails is not on the wishlist" ;; esac
+
+step "25. Containers: mirror 'alpine:3.20' from Docker Hub"
 $C mer repo add hub --format oci
 SYNC=$($C mer oci sync hub -i library/alpine:3.20 | tr -d '\r')
 echo "$SYNC"
 UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
 carry
 
-step "24. Containers: pull and run with a real Docker engine, from the vault only"
+step "26. Containers: pull and run with a real Docker engine, from the vault only"
 # The vault itself has no published ports (its network is internal), so a
 # second server process on the same vault data is exposed on localhost for
 # the Docker engine of this machine. The image is pulled under a name that
@@ -367,7 +411,7 @@ case "$($V mer wishlist)" in *"images/library/busybox:latest"*) ok "the request 
 docker rmi -f "$IMG" >/dev/null 2>&1 || true
 docker rm -f mer-registry >/dev/null 2>&1 || true
 
-step "25. vault: state and integrity"
+step "27. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log || true' | sed 's/^/  requests answered with 200: /'

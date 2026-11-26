@@ -110,6 +110,21 @@ services:
 
   # A connected build machine: builds a project once so that its local
   # repository shows what the build needs (plugins included).
+  # A connected machine that locks a Ruby project, and a Ruby machine
+  # inside the air gap that installs it.
+  rubybuild:
+    image: ruby:3.4-slim
+    entrypoint: ["sleep", "infinity"]
+    networks: [internet]
+    profiles: [formats]
+
+  rubyclient:
+    image: ruby:3.4-slim
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+
   mavenbuild:
     image: maven:3.9-eclipse-temurin-21
     entrypoint: ["sleep", "infinity"]
