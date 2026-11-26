@@ -1049,6 +1049,7 @@ name = "mer-http"
 version = "1.2.0"
 dependencies = [
  "base64 0.22.1",
+ "libc",
  "mer-auth",
  "mer-blob",
  "mer-core",

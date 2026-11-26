@@ -14,7 +14,10 @@
 #                       release archive across and pass the extracted mer)
 #   --data DIR          data directory (default /var/lib/mer)
 #   --listen ADDR       vault: address for package clients and the panel (default 0.0.0.0:8443)
-#   --admin-listen ADDR vault: put the panel on its own address instead
+#   --admin-listen ADDR vault: put the panel on its own address instead; the
+#                       panel can then also import bundles (from $DATA/files)
+#   --panel ADDR        collector: address of its web panel (default 127.0.0.1:8081;
+#                       reach it with an SSH tunnel)
 #   --hostname NAME     vault: name in the generated TLS certificate (default: this host's name)
 #   --tls-cert FILE --tls-key FILE
 #                       vault: use this certificate instead of generating one
@@ -26,7 +29,7 @@
 set -euo pipefail
 
 REPO="Binchitects/mirror-every-repo"
-ROLE="" VERSION="" BINARY="" DATA="/var/lib/mer" LISTEN="0.0.0.0:8443" ADMIN_LISTEN="" HOSTNAME_="" TLS_CERT="" TLS_KEY=""
+ROLE="" VERSION="" BINARY="" DATA="/var/lib/mer" LISTEN="0.0.0.0:8443" ADMIN_LISTEN="" PANEL="127.0.0.1:8081" HOSTNAME_="" TLS_CERT="" TLS_KEY=""
 NO_TLS=0 NO_START=0 UNINSTALL=0 PURGE=0
 TRUST=()
 LIB=/usr/local/lib/mer CONF=/etc/mer
@@ -46,6 +49,7 @@ while [ $# -gt 0 ]; do
     --data) DATA="${2:?}"; shift ;;
     --listen) LISTEN="${2:?}"; shift ;;
     --admin-listen) ADMIN_LISTEN="${2:?}"; shift ;;
+    --panel) PANEL="${2:?}"; shift ;;
     --hostname) HOSTNAME_="${2:?}"; shift ;;
     --tls-cert) TLS_CERT="${2:?}"; shift ;;
     --tls-key) TLS_KEY="${2:?}"; shift ;;
@@ -70,7 +74,7 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then HAVE
 # ------------------------------------------------------------- uninstall
 if [ "$UNINSTALL" = 1 ]; then
   if [ "$HAVE_SYSTEMD" = 1 ]; then
-    for u in mer-vault.service mer-sync.timer mer-sync.service; do
+    for u in mer-vault.service mer-panel.service mer-sync.timer mer-sync.service; do
       systemctl disable --now "$u" >/dev/null 2>&1 || true
       rm -f "/etc/systemd/system/$u"
     done
@@ -156,12 +160,34 @@ install -d -m 750 -o mer -g mer "$DATA"
 install -d -m 750 -o root -g mer "$CONF"
 MER() { runuser -u mer -- "$LIB/mer" --data "$DATA" "$@"; }
 MER init >/dev/null
+# The one directory the web panel may read and write files in (exports,
+# imports, lockfiles), and where command-line exports go too.
+install -d -m 750 -o mer -g mer "$DATA/files"
 say "installed $INSTALLED in $LIB, data in $DATA"
+
+# The first administrator of the web panel, with a generated password.
+first_admin() {
+  PASSWORD=""
+  if [ -z "$(MER user list 2>/dev/null)" ]; then
+    PASSWORD="$(MER user add admin --role admin | sed -n 's/^password (shown once): //p')"
+    umask 077 && printf '%s\n' "$PASSWORD" > "$CONF/admin-password" && umask 022
+  fi
+}
+show_admin() {
+  if [ -n "$PASSWORD" ]; then
+    echo "  Sign in as    admin"
+    echo "  Password      $PASSWORD"
+    echo "                (also in $CONF/admin-password; delete that file after you change the password)"
+  elif [ -f "$CONF/admin-password" ]; then
+    echo "  Sign in as    admin (first password in $CONF/admin-password, unless you changed it)"
+  fi
+}
 
 # ------------------------------------------------------------- vault
 if [ "$ROLE" = vault ]; then
   SERVE=(serve --listen "$LISTEN" --quiet)
-  [ -n "$ADMIN_LISTEN" ] && SERVE+=(--admin-listen "$ADMIN_LISTEN")
+  # With the panel on its own address it can also import bundles.
+  [ -n "$ADMIN_LISTEN" ] && SERVE+=(--admin-listen "$ADMIN_LISTEN" --jobs --files "$DATA/files")
   SCHEME=https
   if [ "$NO_TLS" = 1 ]; then
     SCHEME=http
@@ -186,11 +212,7 @@ if [ "$ROLE" = vault ]; then
     MER key trust "$DATA/trust.txt" "${TRUST[@]}" >/dev/null
     say "trusting bundles from ${#TRUST[@]} collector key(s)"
   fi
-  PASSWORD=""
-  if [ -z "$(MER user list 2>/dev/null)" ]; then
-    PASSWORD="$(MER user add admin --role admin | sed -n 's/^password (shown once): //p')"
-    umask 077 && printf '%s\n' "$PASSWORD" > "$CONF/admin-password" && umask 022
-  fi
+  first_admin
   if [ "$HAVE_SYSTEMD" = 1 ]; then
     cat > /etc/systemd/system/mer-vault.service <<EOF
 [Unit]
@@ -244,16 +266,7 @@ mirror-every-repo vault is ready.
 
   Web panel     $SCHEME://$HOST:${PANEL_PORT##*:}/ui/
 EOF
-  if [ -z "$PASSWORD" ] && [ -f "$CONF/admin-password" ]; then
-    echo "  Sign in as    admin (first password in $CONF/admin-password, unless you changed it)"
-  fi
-  if [ -n "$PASSWORD" ]; then
-    cat <<EOF
-  Sign in as    admin
-  Password      $PASSWORD
-                (also in $CONF/admin-password; delete that file after you change the password)
-EOF
-  fi
+  show_admin
   cat <<EOF
 
 Next steps
@@ -269,9 +282,7 @@ fi
 # ------------------------------------------------------------- collector
 if [ "$ROLE" = collector ]; then
   install -d -m 700 -o mer -g mer "$DATA/keys"
-  # Exports are written here (the service user cannot write to a root-owned
-  # disk), then copied to the medium.
-  install -d -m 755 -o mer -g mer "$DATA/outbox"
+
   if [ ! -f "$DATA/keys/bundle.key" ]; then
     MER key gen "$DATA/keys/bundle.key" >/dev/null
     say "generated the bundle signing key ($DATA/keys/bundle.key)"
@@ -300,7 +311,33 @@ mer export seal --key /var/lib/mer/keys/bundle.key
 EOF
     chmod 750 "$CONF/sync.sh" && chgrp mer "$CONF/sync.sh"
   fi
+  first_admin
   if [ "$HAVE_SYSTEMD" = 1 ]; then
+    # The collector's web panel: repositories, sources, syncs, seal and export.
+    # It reaches the internet and the files directory, so it listens on
+    # loopback by default.
+    cat > /etc/systemd/system/mer-panel.service <<EOF
+[Unit]
+Description=mirror-every-repo collector web panel and job runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mer
+Group=mer
+Environment=MER_DATA=$DATA
+ExecStart=$LIB/mer serve --listen $PANEL --jobs --files $DATA/files --bundle-key $DATA/keys/bundle.key --apt-gnupghome $DATA/keys/gnupg --quiet
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=$DATA
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
     cat > /etc/systemd/system/mer-sync.service <<EOF
 [Unit]
 Description=mirror-every-repo collector: sync upstreams and seal a bundle
@@ -332,7 +369,13 @@ Persistent=true
 WantedBy=timers.target
 EOF
     systemctl daemon-reload
-    [ "$NO_START" = 0 ] && systemctl enable -q --now mer-sync.timer
+    if [ "$NO_START" = 0 ]; then
+      systemctl enable -q --now mer-sync.timer
+      systemctl enable -q mer-panel.service
+      systemctl restart mer-panel.service
+      for _ in $(seq 1 30); do curl -fs "http://$PANEL/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
+      curl -fs "http://$PANEL/healthz" >/dev/null 2>&1 || die "the panel did not come up; see: journalctl -u mer-panel"
+    fi
   fi
   cat <<EOF
 
@@ -341,13 +384,19 @@ mirror-every-repo collector is ready.
   Public key of this collector (give it to the vault):
     $PUB
 
+  Web panel     http://$PANEL/ui/  (from another machine: ssh -L ${PANEL##*:}:$PANEL <this host>)
+EOF
+  show_admin
+  cat <<EOF
+
 Next steps
   1. On the vault:  sudo mer key trust $DATA/trust.txt $PUB
      (or install the vault with: --trust $PUB)
-  2. Say what to mirror in $CONF/sync.sh, then run it:  sudo sh $CONF/sync.sh
-     It runs daily by itself (systemctl list-timers mer-sync.timer).
-  3. Write the bundle out and copy it to a disk to carry across:
-       sudo mer export media --seq <n> --out $DATA/outbox/bundle-<n>
-       sudo cp -r $DATA/outbox/bundle-<n> /mnt/usb/
+  2. In the panel's Jobs tab: create repositories, set their sources, sync, seal, export.
+     Or on the command line: say what to mirror in $CONF/sync.sh and run it
+     (sudo sh $CONF/sync.sh); it also runs daily (systemctl list-timers mer-sync.timer).
+  3. Exports land in $DATA/files; copy them to a disk to carry across:
+       sudo mer export media --seq <n> --out $DATA/files/bundle-<n>
+       sudo cp -r $DATA/files/bundle-<n> /mnt/usb/
 EOF
 fi

@@ -514,3 +514,120 @@ fn tls_listener_serves_https_and_marks_the_cookie_secure() {
         Err(HttpError::Tls(_))
     ));
 }
+
+/// A server that runs jobs with a stand-in for the `mer` program: it prints
+/// its arguments, fails when asked to, and can be made to take a while.
+#[cfg(unix)]
+fn jobs_rig() -> (Rig, tempfile::TempDir) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let st = Arc::new(Storage::open(dir.path().join("data")).unwrap());
+    let files = tempfile::tempdir().unwrap();
+    std::fs::write(files.path().join("Cargo.lock"), "x").unwrap();
+    std::fs::create_dir(files.path().join("usb")).unwrap();
+    let exe = dir.path().join("fake-mer");
+    std::fs::write(&exe, "#!/bin/sh\necho \"ran: $*\"\ncase \"$*\" in *--crate=fail*) echo broken >&2; exit 3;; *--crate=slow*) sleep 30;; esac\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let cfg = crate::jobs::JobsConfig { exe, data: dir.path().join("data"), files: Some(files.path().into()), bundle_key: Some("/keys/bundle.key".into()), apt_gnupghome: None };
+    let app = App::with_jobs(st.clone(), cfg);
+    app.auth().create_user("admin", PW, Role::Admin, "test").unwrap();
+    app.auth().create_user("olga", PW, Role::Operator, "test").unwrap();
+    app.auth().create_user("vic", PW, Role::Viewer, "test").unwrap();
+    let cfg = ServerConfig { listen: "127.0.0.1:0".into(), threads: 4, access_log: false, ..Default::default() };
+    let server = HttpServer::start(app.clone(), cfg).unwrap();
+    let base = format!("http://{}", server.addr());
+    (Rig { _dir: dir, st, app, base, server: Some(server) }, files)
+}
+
+#[cfg(unix)]
+fn wait_job(c: &Client, id: u64) -> Resp {
+    for _ in 0..100 {
+        let j = c.get(&format!("/api/jobs/{id}"));
+        if !matches!(j.json["state"].as_str(), Some("queued" | "running")) {
+            return j;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("job {id} did not finish");
+}
+
+#[cfg(unix)]
+#[test]
+fn syncs_run_from_the_panel_with_roles_audit_and_confined_paths() {
+    let (r, _files) = jobs_rig();
+    let (admin, olga, vic) = (Client::login(&r, "admin"), Client::login(&r, "olga"), Client::login(&r, "vic"));
+    let forms = vic.get("/api/jobs/forms");
+    assert_eq!((forms.json["enabled"].as_bool(), forms.json["files"].as_bool(), forms.json["seal"].as_bool()), (Some(true), Some(true), Some(true)));
+    assert!(forms.json["forms"]["cargo"].as_array().unwrap().iter().any(|f| f["name"] == "lockfile"));
+
+    // Creating repos and sources is for admins; running them for operators.
+    assert_eq!(olga.post("/api/repos", json!({ "name": "rust", "format": "cargo" })).status, 403);
+    assert_eq!(admin.post("/api/repos", json!({ "name": "rust", "format": "cargo" })).status, 200);
+    assert_eq!(admin.post("/api/repos", json!({ "name": "x", "format": "nosuch" })).status, 400);
+    let spec = json!({ "spec": { "crate": ["serde@1:derive"], "lockfile": ["Cargo.lock"] } });
+    assert_eq!(olga.post("/api/repos/rust/source", spec.clone()).status, 403);
+    assert_eq!(olga.post("/api/repos/rust/sync", json!({})).status, 400, "no source yet");
+    for bad in [json!({ "spec": { "lockfile": ["../../etc/passwd"] } }), json!({ "spec": { "crate": ["a\nb"] } }), json!({ "spec": { "evil": true } })] {
+        let resp = admin.post("/api/repos/rust/source", bad.clone());
+        assert_eq!(resp.status, 400, "{bad}: {}", resp.text);
+    }
+    assert_eq!(admin.post("/api/repos/rust/source", spec).status, 200);
+    let source = vic.get("/api/repos/rust/source");
+    assert_eq!((source.json["spec"]["crate"][0].as_str(), source.json["updated_by"].as_str()), (Some("serde@1:derive"), Some("admin")));
+
+    assert_eq!(vic.post("/api/repos/rust/sync", json!({})).status, 403);
+    let queued = olga.post("/api/repos/rust/sync", json!({}));
+    assert_eq!(queued.status, 200, "{}", queued.text);
+    let done = wait_job(&vic, queued.json["job"].as_u64().unwrap());
+    assert_eq!((done.json["state"].as_str(), done.json["kind"].as_str(), done.json["actor"].as_str()), (Some("succeeded"), Some("sync"), Some("olga")));
+    let log = done.json["log"].as_str().unwrap();
+    assert!(log.contains("ran: --data=") && log.contains("cargo sync rust --crate=serde@1:derive --lockfile=/"), "{log}");
+
+    // A failing job keeps its output; seal, export and import build their commands.
+    admin.post("/api/repos/rust/source", json!({ "spec": { "crate": ["fail"] } }));
+    let failed = wait_job(&vic, olga.post("/api/repos/rust/sync", json!({})).json["job"].as_u64().unwrap());
+    assert_eq!((failed.json["state"].as_str(), failed.json["exit_code"].as_i64()), (Some("failed"), Some(3)));
+    assert!(failed.json["log"].as_str().unwrap().contains("broken"));
+    let seal = wait_job(&vic, olga.post("/api/bundles/seal", json!({})).json["job"].as_u64().unwrap());
+    assert!(seal.json["log"].as_str().unwrap().contains("export seal --key=/keys/bundle.key"));
+    assert_eq!(olga.post("/api/bundles/export", json!({ "seq": 1, "out": "../outside" })).status, 400);
+    let export = wait_job(&vic, olga.post("/api/bundles/export", json!({ "seq": 1, "out": "usb/b1", "volume_size": "4G" })).json["job"].as_u64().unwrap());
+    assert!(export.json["log"].as_str().unwrap().contains("export media --seq=1 --out=/"), "{}", export.json["log"]);
+    assert_eq!(olga.post("/api/bundles/export", json!({ "seq": 1, "out": "usb" })).status, 400, "an existing directory is not overwritten");
+    let import = wait_job(&vic, olga.post("/api/bundles/import", json!({ "dir": "usb", "auto_publish": true })).json["job"].as_u64().unwrap());
+    assert!(import.json["log"].as_str().unwrap().contains("import media /") && import.json["log"].as_str().unwrap().contains("--auto-publish"));
+
+    // A running job can be cancelled.
+    admin.post("/api/repos/rust/source", json!({ "spec": { "crate": ["slow"] } }));
+    let slow = olga.post("/api/repos/rust/sync", json!({})).json["job"].as_u64().unwrap();
+    for _ in 0..50 {
+        if olga.get(&format!("/api/jobs/{slow}")).json["state"] == "running" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert_eq!(vic.post(&format!("/api/jobs/{slow}/cancel"), json!({})).status, 403);
+    assert_eq!(olga.post(&format!("/api/jobs/{slow}/cancel"), json!({})).status, 200);
+    assert_eq!(wait_job(&vic, slow).json["state"], "cancelled");
+    assert_eq!(olga.post(&format!("/api/jobs/{slow}/cancel"), json!({})).status, 409);
+
+    let jobs = vic.get("/api/jobs");
+    assert_eq!(jobs.json.as_array().unwrap().len(), 6);
+    let audit = admin.get("/api/audit").text;
+    for action in ["repo.create", "source.set", "job.sync", "job.seal", "job.export", "job.import", "job.cancel"] {
+        assert!(audit.contains(action), "{action} is not in the audit log");
+    }
+    let _ = &r.st;
+}
+
+#[test]
+fn a_server_without_jobs_says_so() {
+    let r = rig();
+    let admin = Client::login(&r, "admin");
+    assert_eq!(admin.get("/api/jobs/forms").json["enabled"], false);
+    for (path, body) in [("/api/repos", json!({ "name": "a", "format": "pypi" })), ("/api/repos/tools/sync", json!({})), ("/api/bundles/seal", json!({}))] {
+        let resp = admin.post(path, body);
+        assert_eq!(resp.status, 409, "{path}");
+        assert!(resp.text.contains("--jobs"));
+    }
+}

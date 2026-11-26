@@ -265,6 +265,26 @@ The repo becomes a copy of the directory tree.
 
 The collector only connects to the upstream host you name, plus the hosts that upstream is known to use: `files.pythonhosted.org` for PyPI, `static.crates.io` for crates.io, `auth.docker.io` and its CDN hosts (`production.cloudfront.docker.com`, `production.cloudflare.docker.com`) for Docker Hub, `cdn01.quay.io` to `cdn03.quay.io` for quay.io, `pkg-containers.githubusercontent.com` for ghcr.io, and GitHub's release asset hosts whenever `github.com` is allowed. It honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` when the collector reaches the internet through a proxy; the allowlist still applies to every destination. This includes redirects: a redirect to any other host is refused, never followed, and the error names the host. If that host is expected (a private registry's storage, a CDN), allow it with `--allow-host`. Redirects from https to http are always refused, and credentials are never sent on to another host.
 
+## Run it from the web panel
+
+Everything in the two sections above and below can also be done in the web panel's **Jobs** tab: create repositories, say what each mirrors (its *source*), sync, seal a bundle, write it to disk, and on the vault import it.
+
+Start the server with jobs enabled. The installer does this for you: the collector's panel listens on `127.0.0.1:8081`, and a vault installed with `--admin-listen` can import.
+
+```text
+# collector
+mer serve --listen 127.0.0.1:8081 --jobs --files /var/lib/mer/files \
+    --bundle-key /var/lib/mer/keys/bundle.key --apt-gnupghome /var/lib/mer/keys/gnupg
+# vault: packages for everyone, the panel on its own address
+mer serve --listen 0.0.0.0:8443 --admin-listen 127.0.0.1:8444 --jobs --files /var/lib/mer/files --tls-cert ... --tls-key ...
+```
+
+- A job runs `mer` itself with the same options the command line takes, one job at a time. Its output is shown live and kept (the last 256 KiB). A job can be cancelled. Jobs that were running when the server stopped are marked *interrupted*.
+- The source form for each format lists the same options as `mer <format> sync`; the server checks every value before saving it.
+- `--files` is the only directory panel users can name files in: lockfiles, `go.sum` files, local Maven repositories and keyrings for sources, the target of an export, the source of an import. Paths are relative to it and cannot lead outside, symbolic links included. Without `--files` those fields are refused.
+- Who can do what: admins create repositories and edit sources; operators run syncs, seals, exports and imports, and cancel jobs; viewers see everything. Every change and every job is in the audit log with the user's name.
+- A source decides which hosts the collector contacts, so jobs are refused unless the panel is on a listener package clients cannot reach: `--admin-listen`, or `--listen` on loopback. From another machine, use an SSH tunnel: `ssh -L 8081:127.0.0.1:8081 collector`.
+
 ## Carry bundles across
 
 ### Seal

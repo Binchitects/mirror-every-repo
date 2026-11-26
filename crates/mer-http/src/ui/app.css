@@ -99,3 +99,11 @@ dialog h3 { margin-top: 4px; }
 .op-add { color: var(--good); font-weight: 700; }
 .op-change { color: var(--warn); font-weight: 700; }
 .op-remove { color: var(--bad); font-weight: 700; }
+
+/* jobs */
+pre.log { max-height: 50vh; overflow: auto; background: var(--code-bg, #0f172a); color: #e2e8f0; padding: 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: rgba(127, 127, 127, 0.08); }
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.form small { display: block; margin-top: 2px; }
+textarea { width: 100%; box-sizing: border-box; font: inherit; }

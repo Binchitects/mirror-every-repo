@@ -12,6 +12,11 @@ All notable changes to this project are recorded here. Versions follow [Semantic
 
 - **Maven**: exactly what a local repository holds after a build on a connected machine (plugins included), or artifacts with their dependencies through POM resolution (parents, properties, dependency management, BOMs, scopes, exclusions, ranges, relocations). Files are checked against the strongest upstream checksum; stock `mvn` builds against the vault as a mirror. `mer maven sync`.
 
+### Web panel
+
+- A **Jobs** tab, with `mer serve --jobs`: create repositories, edit each one's source (the same options as `mer <format> sync`, checked by the server), sync, seal, write a bundle to disk, and import from disk on the vault. Jobs run `mer` itself, one at a time, with live logs and cancel. File paths are confined to the `--files` directory. Admins edit sources, operators run jobs, and both are audited. Jobs are refused when the panel shares a public listener with package clients.
+- The database moves to schema 3 (sync sources and jobs). It is upgraded in place on first start; older versions of `mer` cannot open it afterwards.
+
 ### Installation and releases
 
 - `install.sh`: one command installs a vault or a collector as a hardened systemd service, with keys, a TLS certificate and the first administrator, and prints the next steps. It upgrades in place and uninstalls. It is attached to every release.

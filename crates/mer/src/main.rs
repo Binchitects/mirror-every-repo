@@ -134,6 +134,21 @@ enum Cmd {
         /// Do not print one line per request.
         #[arg(long)]
         quiet: bool,
+        /// Let the web panel run syncs, seals, exports and imports (as this
+        /// program, one at a time). The panel must then be on its own,
+        /// non-public listener: --admin-listen, or --listen on loopback.
+        #[arg(long)]
+        jobs: bool,
+        /// The directory panel users may name files in: lockfiles, local
+        /// Maven repositories, keyrings, export targets, import sources.
+        #[arg(long, requires = "jobs")]
+        files: Option<PathBuf>,
+        /// Bundle signing key, for sealing from the panel.
+        #[arg(long, requires = "jobs")]
+        bundle_key: Option<PathBuf>,
+        /// GnuPG home of the apt site key, for apt syncs from the panel.
+        #[arg(long, requires = "jobs")]
+        apt_gnupghome: Option<PathBuf>,
     },
     /// Users of the web panel.
     User {
@@ -1426,8 +1441,32 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Cmd::Serve { listen, admin_listen, no_admin, tls_cert, tls_key, threads, quiet } => {
-            let app = mer_http::App::new(open(&data)?);
+        Cmd::Serve { listen, admin_listen, no_admin, tls_cert, tls_key, threads, quiet, jobs, files, bundle_key, apt_gnupghome } => {
+            let app = if jobs {
+                if no_admin {
+                    bail!("--jobs needs the web panel; drop --no-admin");
+                }
+                // Jobs reach the internet and the file system: never from a panel
+                // that package clients can reach.
+                let panel_addr = admin_listen.as_deref().unwrap_or(&listen);
+                let loopback = panel_addr.starts_with("127.") || panel_addr.starts_with("[::1]") || panel_addr.starts_with("localhost:");
+                if admin_listen.is_none() && !loopback {
+                    bail!("--jobs: put the panel on its own listener (--admin-listen 127.0.0.1:8081) or serve on loopback only");
+                }
+                for (what, p) in [("--files", files.as_ref()), ("--bundle-key", bundle_key.as_ref()), ("--apt-gnupghome", apt_gnupghome.as_ref())] {
+                    if let Some(p) = p {
+                        if !p.exists() {
+                            bail!("{what} {} does not exist", p.display());
+                        }
+                    }
+                }
+                let exe = std::env::current_exe().context("finding this program")?;
+                let data = std::fs::canonicalize(&data).with_context(|| format!("{}", data.display()))?;
+                let cfg = mer_http::jobs::JobsConfig { exe, data, files, bundle_key, apt_gnupghome };
+                mer_http::App::with_jobs(open(&cfg.data)?, cfg)
+            } else {
+                mer_http::App::new(open(&data)?)
+            };
             let tls = match (tls_cert, tls_key) {
                 (Some(c), Some(k)) => Some((
                     std::fs::read(&c).with_context(|| format!("reading {}", c.display()))?,

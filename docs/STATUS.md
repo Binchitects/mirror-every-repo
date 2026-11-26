@@ -48,6 +48,7 @@ Version and range logic is checked against the reference implementations: apt ve
 - Transfers: imported bundles and how far each repository has been applied.
 - Wishlist, Traffic (per repository, per file, per client), Audit log with its integrity check.
 - Access: users and roles, client tokens, own password.
+- Jobs (with `mer serve --jobs`): repositories and their sources, sync, seal, export to disk, import from disk, with live job logs and cancel. Jobs run `mer` itself, one at a time; files are confined to the `--files` directory; editing sources is for admins, running jobs for operators, and both are audited.
 
 Create the first administrator on the server with `mer user add admin --role admin`. Use `--tls-cert` and `--tls-key` for HTTPS, and `--admin-listen` to keep the panel on a different address from package clients.
 
@@ -105,13 +106,13 @@ Upstream signatures are checked for apt and, when a key is given, for RPM reposi
 - Bundle trust is a static file of public keys with a threshold. No root keys, no rotation chain, no epochs beyond a fixed epoch 1.
 - Bundle payload is not compressed and not encrypted.
 - A repo's changes always travel as chained steps. There is no "full state" bundle, so a vault that is further behind than the step window needs the missing bundles re-exported.
+- Jobs run one at a time per server, and there is no schedule in the panel (the installer's daily timer runs `/etc/mer/sync.sh`). Diode export and import are command-line only.
 - Diode: no heartbeats and no signed staleness detection; no spill-to-disk for partly received segments; plain socket calls with the default receive buffer (the demos show a quarter or more of packets dropped on a burst, which error correction and the second pass absorb).
 - Media: no parity volumes.
 
 ## Not built yet
 
 - LDAP/AD and OIDC sign-in, and per-repository permissions.
-- Running a sync or an export from the panel. The panel reviews and decides; mirroring, sealing and importing are command-line operations.
 - The signed report file carrying the wishlist and missing blobs back to the collector, and wish ingest on the collector. Misses are recorded and listed (`mer wishlist`), not exported.
 - A wishlist for apt: apt never asks the server for a package that is not in the index, so "package not mirrored" does not show up as an HTTP miss. It needs a different signal. (pip, npm and container pulls do land on the wishlist.)
 - Verifying the Go checksum database's signed tree and inclusion proofs on the collector, and serving a checksum database from the vault.

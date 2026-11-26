@@ -144,7 +144,7 @@ mer export media --seq 1 --out /mnt/usb           # or: mer export diode --seq 1
 mer import media /mnt/usb                         # or: mer import diode --link-key /keys/link.key
 ```
 
-Then open the web panel at `https://vault:8080/ui/`, review what each new snapshot would change, approve it and publish it. The same is available as `mer approve`, `mer publish` and `mer rollback`.
+Then open the web panel at `https://vault:8080/ui/`, review what each new snapshot would change, approve it and publish it. The same is available as `mer approve`, `mer publish` and `mer rollback`. With `mer serve --jobs`, the panel also runs the rest: syncs and exports on the collector, imports on the vault (see the [guide](docs/GUIDE.md#run-it-from-the-web-panel)).
 
 **On client machines inside the air gap**
 

@@ -174,6 +174,31 @@ fn get(app: &App, me: &Identity, segments: &[&str], query: &str) -> ApiResult {
     let st = &app.st;
     match segments {
         ["me"] => Ok(me_json(me)),
+        ["jobs", "forms"] => Ok(json!({
+            "enabled": app.jobs.is_some(),
+            "files": app.jobs.as_ref().is_some_and(|j| j.cfg.files.is_some()),
+            "seal": app.jobs.as_ref().is_some_and(|j| j.cfg.bundle_key.is_some()),
+            "forms": crate::jobs::forms_json(),
+        })),
+        ["jobs"] => {
+            let rows = st.meta().read(|t| t.job_list(100))?;
+            Ok(json!(rows.iter().map(job_json).collect::<Vec<_>>()))
+        }
+        ["jobs", id] => {
+            let id: i64 = id.parse().map_err(|_| bad("job number"))?;
+            let j = st.meta().read(|t| t.job_get(id))?.ok_or_else(|| ApiError(404, "no such job".into()))?;
+            let mut v = job_json(&j);
+            v["log"] = json!(j.log);
+            Ok(v)
+        }
+        ["repos", repo, "source"] => {
+            let r = st.repo(repo)?;
+            let s = st.meta().read(|t| t.source_get(r.id))?;
+            Ok(match s {
+                Some(s) => json!({ "format": r.format, "spec": serde_json::from_str::<Value>(&s.spec).unwrap_or(Value::Null), "updated_at": s.updated_at, "updated_by": s.updated_by }),
+                None => json!({ "format": r.format, "spec": null }),
+            })
+        }
         ["overview"] => overview(app),
         ["repos", repo, "snapshots"] => {
             let rows = st.meta().read(|t| {
@@ -349,10 +374,118 @@ fn overview(app: &App) -> ApiResult {
     Ok(v)
 }
 
+fn job_json(j: &mer_meta::JobRow) -> Value {
+    json!({
+        "id": j.id, "kind": j.kind, "target": j.target, "state": j.state, "actor": j.actor,
+        "created_at": j.created_at, "started_at": j.started_at, "finished_at": j.finished_at, "exit_code": j.exit_code,
+        "args": serde_json::from_str::<Value>(&j.args).unwrap_or(Value::Null),
+    })
+}
+
+/// Queue a job; audited with who asked for it.
+fn enqueue(app: &App, actor: &str, kind: &str, target: &str, args: Vec<String>) -> ApiResult {
+    let runner = app.jobs.as_ref().ok_or_else(no_jobs)?;
+    let args_json = serde_json::to_string(&args).expect("JSON");
+    let now = mer_storage::now_ms();
+    let id = app.st.meta().write(|t| {
+        let id = t.job_create(kind, target, &args_json, actor, now)?;
+        t.audit(now, actor, &format!("job.{kind}"), &format!("job {id}: {target}"))?;
+        Ok(id)
+    })?;
+    runner.notify();
+    Ok(json!({ "job": id }))
+}
+
+fn no_jobs() -> ApiError {
+    ApiError(409, "this server does not run jobs (start it with mer serve --jobs)".into())
+}
+
 fn post(app: &App, me: &Identity, segments: &[&str], b: &Value) -> ApiResult {
     let st = &app.st;
     let actor = me.name.as_str();
     match segments {
+        ["repos"] => {
+            require(me.role, Role::Admin)?;
+            app.jobs.as_ref().ok_or_else(no_jobs)?;
+            let name = str_field(b, "name")?;
+            let format = str_field(b, "format")?;
+            if !crate::jobs::forms().iter().any(|(f, _, _)| *f == format) && format != "raw" {
+                return Err(bad(format!("format {format} is not known")));
+            }
+            st.create_repo(name, format).map_err(|e| match e {
+                StorageError::Meta(MetaError::Invalid(m)) => bad(m),
+                other => other.into(),
+            })?;
+            st.meta().write(|t| t.audit(mer_storage::now_ms(), actor, "repo.create", &format!("{name} ({format})")))?;
+            Ok(json!({}))
+        }
+        ["repos", repo, "source"] => {
+            require(me.role, Role::Admin)?;
+            let runner = app.jobs.as_ref().ok_or_else(no_jobs)?;
+            let r = st.repo(repo)?;
+            let spec = crate::jobs::validate_spec(&r.format, b.get("spec").unwrap_or(&Value::Null), runner.cfg.files.as_deref()).map_err(bad)?;
+            let text = spec.to_string();
+            let now = mer_storage::now_ms();
+            st.meta().write(|t| {
+                t.source_set(r.id, &text, now, actor)?;
+                t.audit(now, actor, "source.set", &format!("{repo}: {text}"))
+            })?;
+            Ok(json!({ "spec": spec }))
+        }
+        ["repos", repo, "sync"] => {
+            require(me.role, Role::Operator)?;
+            let runner = app.jobs.as_ref().ok_or_else(no_jobs)?;
+            let r = st.repo(repo)?;
+            let s = st.meta().read(|t| t.source_get(r.id))?.ok_or_else(|| bad(format!("{repo} has no source yet; an admin sets it first")))?;
+            let spec: Value = serde_json::from_str(&s.spec).map_err(|_| bad("the stored source is unreadable"))?;
+            let args = crate::jobs::sync_args(&runner.cfg, &r.format, repo, &spec).map_err(bad)?;
+            enqueue(app, actor, "sync", repo, args)
+        }
+        ["bundles", "seal"] => {
+            require(me.role, Role::Operator)?;
+            let runner = app.jobs.as_ref().ok_or_else(no_jobs)?;
+            let key = runner.cfg.bundle_key.clone().ok_or_else(|| bad("this server has no bundle key (start it with --bundle-key)"))?;
+            enqueue(app, actor, "seal", "bundle", vec!["export".into(), "seal".into(), format!("--key={}", key.display())])
+        }
+        ["bundles", "export"] => {
+            require(me.role, Role::Operator)?;
+            let runner = app.jobs.as_ref().ok_or_else(no_jobs)?;
+            let seq = b.get("seq").and_then(Value::as_u64).filter(|s| *s > 0).ok_or_else(|| bad("seq must be a bundle number"))?;
+            let out = crate::jobs::confine(runner.cfg.files.as_deref(), str_field(b, "out")?, false).map_err(bad)?;
+            if out.exists() {
+                return Err(bad("the export directory exists already; name a new one"));
+            }
+            let mut args = vec!["export".into(), "media".into(), format!("--seq={seq}"), format!("--out={}", out.display())];
+            if let Some(v) = b.get("volume_size").and_then(Value::as_str).filter(|v| !v.is_empty()) {
+                if !v.bytes().all(|c| c.is_ascii_alphanumeric()) {
+                    return Err(bad("volume_size is a size like 4G or fat32"));
+                }
+                args.push(format!("--volume-size={v}"));
+            }
+            enqueue(app, actor, "export", &format!("bundle {seq}"), args)
+        }
+        ["bundles", "import"] => {
+            require(me.role, Role::Operator)?;
+            let runner = app.jobs.as_ref().ok_or_else(no_jobs)?;
+            let dir = crate::jobs::confine(runner.cfg.files.as_deref(), str_field(b, "dir")?, true).map_err(bad)?;
+            let mut args = vec!["import".into(), "media".into(), dir.display().to_string()];
+            if b.get("auto_publish").and_then(Value::as_bool) == Some(true) {
+                args.push("--auto-publish".into());
+            }
+            enqueue(app, actor, "import", &dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), args)
+        }
+        ["jobs", id, "cancel"] => {
+            require(me.role, Role::Operator)?;
+            let runner = app.jobs.as_ref().ok_or_else(no_jobs)?;
+            let id: i64 = id.parse().map_err(|_| bad("job number"))?;
+            let now = mer_storage::now_ms();
+            let queued = st.meta().write(|t| t.job_cancel_queued(id, now))?;
+            if !queued && !runner.cancel_running(id) {
+                return Err(ApiError(409, "the job is not queued or running".into()));
+            }
+            st.meta().write(|t| t.audit(now, actor, "job.cancel", &format!("job {id}")))?;
+            Ok(json!({}))
+        }
         ["repos", repo, "snapshots", seq, action] => {
             require(me.role, Role::Operator)?;
             let seq: u64 = seq.parse().map_err(|_| bad("snapshot number"))?;

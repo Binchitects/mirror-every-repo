@@ -10,6 +10,7 @@
 //!   for signed-in users only.
 mod api;
 mod formats;
+pub mod jobs;
 mod packages;
 #[cfg(test)]
 mod tests;
@@ -86,10 +87,25 @@ pub struct App {
     pub(crate) auth: Auth,
     pub(crate) metrics: Metrics,
     pub(crate) traffic: Traffic,
+    /// Present when this server runs jobs (`mer serve --jobs`).
+    pub(crate) jobs: Option<Arc<jobs::Jobs>>,
 }
 
 impl App {
     pub fn new(st: Arc<Storage>) -> Arc<App> {
+        Self::build(st, None)
+    }
+
+    /// An app that also runs jobs (syncs, seals, exports, imports) from the
+    /// panel. Starts the job runner.
+    pub fn with_jobs(st: Arc<Storage>, cfg: jobs::JobsConfig) -> Arc<App> {
+        let runner = Arc::new(jobs::Jobs::new(cfg));
+        let app = Self::build(st.clone(), Some(runner.clone()));
+        std::thread::spawn(move || runner.run(st));
+        app
+    }
+
+    fn build(st: Arc<Storage>, jobs: Option<Arc<jobs::Jobs>>) -> Arc<App> {
         Arc::new(App {
             auth: Auth::new(st.clone()),
             st,
@@ -99,6 +115,7 @@ impl App {
                 clients: Mutex::default(),
                 last_flush: Mutex::new(Instant::now()),
             },
+            jobs,
         })
     }
 

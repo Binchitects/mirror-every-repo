@@ -81,7 +81,8 @@ function badge(text, kind) {
 
 function stateBadge(s) {
   const kinds = { approved: "good", sealed: "warn", rejected: "bad", ok: "good", imported: "good",
-    incomplete: "warn", waiting_base: "warn", receiving: "warn", quota_blocked: "bad", diverged: "bad", failed: "bad" };
+    incomplete: "warn", waiting_base: "warn", receiving: "warn", quota_blocked: "bad", diverged: "bad", failed: "bad",
+    queued: "warn", running: "warn", succeeded: "good", cancelled: "", interrupted: "bad" };
   const labels = { sealed: "awaiting review", waiting_base: "waiting for earlier bundle", quota_blocked: "over quota" };
   return badge(labels[s] || s, kinds[s]);
 }
@@ -508,12 +509,164 @@ function tokensCard(tokens, repos) {
     shown);
 }
 
+// ------------------------------------------------------------------- jobs
+
+// Syncs, seals, exports and imports run by the server (mer serve --jobs).
+// Forms are built from the field list the server publishes, so they always
+// match what the server accepts.
+
+function sourceSummary(spec) {
+  if (!spec) return h("span", { class: "muted" }, "no source yet");
+  const parts = Object.entries(spec).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`);
+  return h("span", { class: "mono" }, parts.join(" · "));
+}
+
+function fieldInput(f, value) {
+  if (f.kind === "bool") return h("input", { type: "checkbox", checked: value === true, "data-field": f.name });
+  if (f.kind === "choice") {
+    const sel = h("select", { "data-field": f.name }, h("option", { value: "" }, "(default)"), f.choices.map((c) => h("option", { value: c }, c)));
+    sel.value = value || "";
+    return sel;
+  }
+  if (f.kind.endsWith("list")) {
+    const ta = h("textarea", { rows: "3", "data-field": f.name, placeholder: "one per line" });
+    ta.value = (value || []).join("\n");
+    return ta;
+  }
+  const input = h("input", { type: "text", "data-field": f.name, placeholder: f.kind === "path" ? "relative to the files directory" : "" });
+  input.value = value || "";
+  return input;
+}
+
+function readFields(form, fields) {
+  const spec = {};
+  for (const f of fields) {
+    const el = form.querySelector(`[data-field="${f.name}"]`);
+    if (f.kind === "bool") { if (el.checked) spec[f.name] = true; continue; }
+    if (f.kind.endsWith("list")) {
+      const items = el.value.split("\n").map((x) => x.trim()).filter(Boolean);
+      if (items.length) spec[f.name] = items;
+      continue;
+    }
+    if (el.value.trim()) spec[f.name] = el.value.trim();
+  }
+  return spec;
+}
+
+async function sourceDialog(repo, format, current, info) {
+  const fields = info.forms[format];
+  if (!fields) { flash("bad", `${format} repositories cannot be synced from the panel.`); return; }
+  const form = h("div", { class: "form" }, fields.map((f) => h("label", { class: "f" },
+    `${f.name.replaceAll("_", " ")}${f.required ? " *" : ""}`, fieldInput(f, current && current[f.name]), h("small", { class: "muted" }, f.help))));
+  if (!(await confirmDialog(`Source of ${repo} (${format})`, [form], "Save", false))) return;
+  try {
+    await api(`repos/${encodeURIComponent(repo)}/source`, { spec: readFields(form, fields) });
+    flash("good", `Source of ${repo} saved.`);
+  } catch (err) { flash("bad", err.message); }
+  render();
+}
+
+async function newRepoDialog(info) {
+  const name = h("input", { type: "text", placeholder: "for example pypi" });
+  const format = h("select", {}, Object.keys(info.forms).map((f) => h("option", { value: f }, f)));
+  if (!(await confirmDialog("New repository", [h("label", { class: "f" }, "Name", name), h("label", { class: "f" }, "Format", format)], "Create", false))) return;
+  try {
+    await api("repos", { name: name.value.trim(), format: format.value });
+    flash("good", `Repository ${name.value.trim()} created. Set its source next.`);
+  } catch (err) { flash("bad", err.message); }
+  render();
+}
+
+async function jobDialog(id) {
+  const pre = h("pre", { class: "log" }, "Loading…");
+  const status = h("p", {});
+  const cancel = h("button", { class: "btn danger", onclick: async () => {
+    try { await api(`jobs/${id}/cancel`, {}); } catch (err) { status.textContent = err.message; }
+  } }, "Cancel job");
+  let timer = null;
+  const refresh = async () => {
+    try {
+      const j = await api(`jobs/${id}`);
+      status.replaceChildren(stateBadge(j.state), ` ${j.kind} ${j.target}, by ${j.actor}`, j.exit_code !== null ? `, exit code ${j.exit_code}` : "");
+      pre.textContent = j.log || "(no output yet)";
+      pre.scrollTop = pre.scrollHeight;
+      const live = ["queued", "running"].includes(j.state);
+      cancel.hidden = !live || !can("operator");
+      if (live) timer = setTimeout(refresh, 1500);
+    } catch (err) { status.textContent = err.message; }
+  };
+  refresh();
+  await confirmDialog(`Job #${id}`, [status, pre, cancel], null, false);
+  clearTimeout(timer);
+  render();
+}
+
+async function runJob(path, body, what) {
+  try {
+    const r = await api(path, body || {});
+    flash("good", `${what}: job #${r.job} queued.`);
+  } catch (err) { flash("bad", err.message); }
+  render();
+}
+
+async function jobsView() {
+  const info = await jobsInfo();
+  if (!info.enabled) {
+    return h("div", {}, h("h2", {}, "Jobs"), h("div", { class: "card empty" },
+      "This server does not run jobs. On a collector, start it with: mer serve --jobs --admin-listen 127.0.0.1:8081 --files <dir> --bundle-key <key>"));
+  }
+  const [o, jobs] = await Promise.all([api("overview"), api("jobs")]);
+  const sources = await Promise.all(o.repos.map((r) => api(`repos/${encodeURIComponent(r.name)}/source`).catch(() => ({ spec: null }))));
+  const repoRows = o.repos.map((r, i) => h("tr", {},
+    td(r.name), td(badge(r.format)), td(sourceSummary(sources[i].spec)),
+    td(h("div", { class: "actions" },
+      can("admin") && h("button", { class: "btn", onclick: () => sourceDialog(r.name, r.format, sources[i].spec, info) }, "Edit source"),
+      can("operator") && sources[i].spec && h("button", { class: "btn primary", onclick: () => runJob(`repos/${encodeURIComponent(r.name)}/sync`, {}, `Sync of ${r.name}`) }, "Sync now")))));
+  const seq = h("input", { type: "number", min: "1", step: "1", placeholder: "bundle number" });
+  const out = h("input", { type: "text", placeholder: "for example usb/bundle-1" });
+  const vol = h("input", { type: "text", placeholder: "fat32 (default), 4G, 25G" });
+  const dir = h("input", { type: "text", placeholder: "for example usb" });
+  const auto = h("input", { type: "checkbox" });
+  const bundleCard = can("operator") && h("div", { class: "card" },
+    h("div", { class: "head" }, h("h3", {}, "Bundles"), h("span", { class: "spacer" }),
+      info.seal && h("button", { class: "btn primary", onclick: () => runJob("bundles/seal", {}, "Seal") }, "Seal a bundle of all changes")),
+    info.files ? h("div", { class: "split" },
+      h("form", { class: "form", onsubmit: (e) => { e.preventDefault(); runJob("bundles/export", { seq: Number(seq.value), out: out.value.trim(), volume_size: vol.value.trim() }, "Export"); } },
+        h("h4", {}, "Write a bundle to disk"), h("label", { class: "f" }, "Bundle", seq), h("label", { class: "f" }, "Directory (new, under the files directory)", out),
+        h("label", { class: "f" }, "Volume size", vol), h("button", { class: "btn", type: "submit" }, "Export")),
+      h("form", { class: "form", onsubmit: (e) => { e.preventDefault(); runJob("bundles/import", { dir: dir.value.trim(), auto_publish: auto.checked }, "Import"); } },
+        h("h4", {}, "Import bundles from disk"), h("label", { class: "f" }, "Directory (under the files directory)", dir),
+        h("label", {}, auto, " Publish without review"), h("button", { class: "btn", type: "submit" }, "Import")))
+      : h("p", { class: "muted" }, "Exports and imports need a files directory: start the server with --files <dir>."));
+  const jobRows = jobs.map((j) => h("tr", { class: "click", onclick: () => jobDialog(j.id) },
+    td(`#${j.id}`), td(j.kind), td(j.target), td(stateBadge(j.state)), td(j.actor), td(when(j.started_at || j.created_at), "nowrap"),
+    td(j.finished_at && j.started_at ? `${Math.max(1, Math.round((j.finished_at - j.started_at) / 1000))} s` : "", "num")));
+  if (jobs.some((j) => ["queued", "running"].includes(j.state))) {
+    state.timer = setTimeout(() => { if (state.tab === "jobs" && !document.querySelector("dialog[open]")) render(); }, 3000);
+  }
+  return h("div", {},
+    h("h2", {}, "Jobs"),
+    h("div", { class: "card" },
+      h("div", { class: "head" }, h("h3", {}, "Repositories and their sources"), h("span", { class: "spacer" }),
+        can("admin") && h("button", { class: "btn", onclick: () => newRepoDialog(info) }, "New repository")),
+      table(["Repository", "Format", "Source", ""], repoRows, "No repositories yet.")),
+    bundleCard,
+    h("div", { class: "card" }, h("h3", {}, "Recent jobs"),
+      table(["Job", "Kind", "Target", "State", "By", "Started", { label: "Took", num: true }], jobRows, "No jobs yet.")));
+}
+
+async function jobsInfo() {
+  if (!state.jobs) state.jobs = await api("jobs/forms");
+  return state.jobs;
+}
+
 // ------------------------------------------------------------------ shell
 
 const TABS = [
   ["overview", "Overview", overviewView],
   ["repos", "Repositories", reposView],
   ["transfers", "Transfers", transfersView],
+  ["jobs", "Jobs", jobsView],
   ["wishlist", "Wishlist", wishlistView],
   ["traffic", "Traffic", trafficView],
   ["audit", "Audit log", auditView],
@@ -522,6 +675,7 @@ const TABS = [
 
 async function render() {
   clearTimeout(state.timer);
+  state.timer = null;
   if (!state.me) {
     let needsSetup = false;
     try { needsSetup = (await api("setup")).needs_setup; } catch (_) { /* shown as a normal login */ }

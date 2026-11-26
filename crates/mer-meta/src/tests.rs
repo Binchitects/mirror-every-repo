@@ -369,3 +369,42 @@ fn misses_are_counted_and_ranked() {
     })
     .unwrap();
 }
+
+#[test]
+fn a_version_2_database_with_data_is_upgraded_to_sources_and_jobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.db");
+    {
+        // A database as 1.1 left it: schema 2 with a repo and a user in it.
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(&format!("BEGIN;\n{}\nPRAGMA user_version = 1;\nCOMMIT;", include_str!("schema.sql"))).unwrap();
+        c.execute_batch(&format!("BEGIN;\n{}\nPRAGMA user_version = 2;\nCOMMIT;", include_str!("migration_2.sql"))).unwrap();
+        c.execute("INSERT INTO repo (name, format) VALUES ('pypi', 'pypi')", []).unwrap();
+        c.execute("INSERT INTO user (name, pw_hash, role, created_at) VALUES ('admin', 'x', 'admin', 1)", []).unwrap();
+    }
+    let m = Meta::open(&path).unwrap();
+    let version: i64 = m.read(|t| Ok(t.c.query_row("PRAGMA user_version", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(version, 3);
+    let repo = m.read(|t| t.repo_get("pypi")).unwrap().expect("repo survives");
+    assert!(m.read(|t| t.user_get("admin")).unwrap().is_some(), "user survives");
+
+    m.write(|t| t.source_set(repo.id, r#"{"requirements":["idna"]}"#, 5, "admin")).unwrap();
+    m.write(|t| t.source_set(repo.id, r#"{"requirements":["flask"]}"#, 6, "olga")).unwrap();
+    let s = m.read(|t| t.source_get(repo.id)).unwrap().unwrap();
+    assert_eq!((s.repo.as_str(), s.spec.as_str(), s.updated_by.as_str()), ("pypi", r#"{"requirements":["flask"]}"#, "olga"));
+
+    let a = m.write(|t| t.job_create("sync", "pypi", "[]", "olga", 10)).unwrap();
+    let b = m.write(|t| t.job_create("seal", "-", "[]", "olga", 11)).unwrap();
+    let taken = m.write(|t| t.job_take(12)).unwrap().unwrap();
+    assert_eq!((taken.id, taken.state.as_str(), taken.started_at), (a, "running", Some(12)));
+    assert!(m.write(|t| t.job_cancel_queued(b, 13)).unwrap());
+    assert!(!m.write(|t| t.job_cancel_queued(a, 13)).unwrap(), "a running job is not cancelled here");
+    m.write(|t| t.job_log(a, &"x".repeat(MAX_JOB_LOG + 10))).unwrap();
+    assert_eq!(m.read(|t| t.job_get(a)).unwrap().unwrap().log.len(), MAX_JOB_LOG, "logs are capped");
+    // A restart: what was running is interrupted, never left running.
+    assert_eq!(m.write(|t| t.jobs_interrupt_running(20)).unwrap(), 1);
+    let list = m.read(|t| t.job_list(10)).unwrap();
+    assert_eq!(list.iter().map(|j| (j.id, j.state.as_str())).collect::<Vec<_>>(), [(b, "cancelled"), (a, "interrupted")]);
+    assert!(list.iter().all(|j| j.log.is_empty()), "lists leave the logs out");
+    assert_eq!(clip_log("é"), "é");
+}
