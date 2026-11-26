@@ -2,7 +2,7 @@
 
 All notable changes to this project are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [1.4.0] - 2026-11-27
 
 ### Formats
 
@@ -13,6 +13,10 @@ All notable changes to this project are recorded here. Versions follow [Semantic
 ### Serving
 
 - Every file is sent with `Repr-Digest` (its SHA-256), which clients can check what they assemble against.
+
+### Upgrading
+
+No database or bundle format change: the vault and the collector can be upgraded in either order.
 
 ## [1.3.0] - 2026-11-26
 

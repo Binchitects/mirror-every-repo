@@ -2,7 +2,7 @@
 # The installer and the web panel, end to end, on two systemd machines:
 #
 #   bash deploy/demo-install.sh            # builds mer from this tree
-#   bash deploy/demo-install.sh --release v1.3.0   # installs a published release
+#   bash deploy/demo-install.sh --release v1.4.0   # installs a published release
 #
 # 1. install.sh sets up a collector and a vault (keys, TLS, first admin,
 #    services) the way an operator would.
