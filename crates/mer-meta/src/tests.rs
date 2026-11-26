@@ -371,7 +371,7 @@ fn misses_are_counted_and_ranked() {
 }
 
 #[test]
-fn a_version_2_database_with_data_is_upgraded_to_sources_and_jobs() {
+fn a_version_2_database_with_data_is_upgraded_to_sources_jobs_and_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("meta.db");
     {
@@ -384,7 +384,8 @@ fn a_version_2_database_with_data_is_upgraded_to_sources_and_jobs() {
     }
     let m = Meta::open(&path).unwrap();
     let version: i64 = m.read(|t| Ok(t.c.query_row("PRAGMA user_version", [], |r| r.get(0))?)).unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
+    assert_eq!(m.read(|t| t.repo_get("pypi")).unwrap().unwrap().stale_after_days, None, "no age limit by default");
     let repo = m.read(|t| t.repo_get("pypi")).unwrap().expect("repo survives");
     assert!(m.read(|t| t.user_get("admin")).unwrap().is_some(), "user survives");
 

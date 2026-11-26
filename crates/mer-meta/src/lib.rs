@@ -2,6 +2,7 @@
 mod access;
 mod channel;
 mod jobs;
+mod history;
 mod snapshot;
 #[cfg(test)]
 mod tests;
@@ -9,6 +10,7 @@ mod tests;
 pub use access::*;
 pub use channel::*;
 pub use jobs::*;
+pub use history::*;
 pub use snapshot::*;
 
 use mer_core::{CoreError, Digest, SnapshotId};
@@ -16,8 +18,8 @@ use rusqlite::{Connection, TransactionBehavior};
 use std::path::Path;
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: i64 = 3;
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("schema.sql")), (2, include_str!("migration_2.sql")), (3, include_str!("migration_3.sql"))];
+const SCHEMA_VERSION: i64 = 4;
+const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("schema.sql")), (2, include_str!("migration_2.sql")), (3, include_str!("migration_3.sql")), (4, include_str!("migration_4.sql"))];
 
 #[derive(Debug, thiserror::Error)]
 pub enum MetaError {
