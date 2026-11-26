@@ -98,7 +98,28 @@ if [ "$IMAGE" = 1 ]; then
   step "6. container image"
   docker build -q -t "$IMAGE_NAME:$VERSION" -t "$IMAGE_NAME:latest" "$WORK/src" >/dev/null
   docker run --rm "$IMAGE_NAME:$VERSION" --version
-  docker push -q "$IMAGE_NAME:$VERSION" && docker push -q "$IMAGE_NAME:latest"
+  # Each push must succeed, or the release stops here (a failure on the left of
+  # && would not stop the script). Uploads to ghcr.io sometimes time out, so
+  # each is tried a few times; a retry resumes with the layers already there.
+  push() {
+    for try in 1 2 3; do
+      docker push -q "$1" && return 0
+      echo "push of $1 failed (try $try of 3)" >&2
+      sleep 10
+    done
+    # The Docker daemon may upload through a proxy that times out on large
+    # layers. skopeo, in a container, connects directly and uses the same
+    # login (docker login writes it to ~/.docker/config.json).
+    echo "pushing $1 with skopeo instead" >&2
+    docker save "$1" -o "$WORK/image.tar" &&
+      docker run --rm -v "$WORK:/img:ro" -v "${DOCKER_CONFIG:-$HOME/.docker}/config.json:/auth.json:ro" quay.io/skopeo/stable:v1.16.1 \
+        copy -q --retry-times 3 --authfile /auth.json "docker-archive:/img/image.tar" "docker://$1"
+  }
+  push "$IMAGE_NAME:$VERSION" || { echo "the image was not pushed; nothing was published" >&2; exit 1; }
+  push "$IMAGE_NAME:latest" || { echo "the latest tag was not pushed; nothing was published" >&2; exit 1; }
+  # Prove it is there: read it back from the registry.
+  docker manifest inspect "$IMAGE_NAME:$VERSION" >/dev/null || { echo "the registry does not have $IMAGE_NAME:$VERSION" >&2; exit 1; }
+  echo "pushed $IMAGE_NAME:$VERSION and :latest"
 fi
 
 if [ "$PUBLISH" = 1 ]; then
