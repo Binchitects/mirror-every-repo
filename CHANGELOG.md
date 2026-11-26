@@ -2,7 +2,7 @@
 
 All notable changes to this project are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-26
 
 ### Formats
 
