@@ -765,6 +765,7 @@ dependencies = [
  "mer-format-cargo",
  "mer-format-go",
  "mer-format-helm",
+ "mer-format-maven",
  "mer-format-npm",
  "mer-format-nuget",
  "mer-format-oci",
@@ -935,6 +936,25 @@ dependencies = [
  "thiserror",
  "tiny_http",
  "yaml-rust2",
+]
+
+[[package]]
+name = "mer-format-maven"
+version = "1.1.0"
+dependencies = [
+ "hex",
+ "mer-blob",
+ "mer-core",
+ "mer-fetch",
+ "mer-meta",
+ "mer-storage",
+ "quick-xml",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tiny_http",
 ]
 
 [[package]]

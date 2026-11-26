@@ -99,6 +99,21 @@ services:
     networks: [diode]
     profiles: [formats]
 
+  # A connected build machine: builds a project once so that its local
+  # repository shows what the build needs (plugins included).
+  mavenbuild:
+    image: maven:3.9-eclipse-temurin-21
+    entrypoint: ["sleep", "infinity"]
+    networks: [internet]
+    profiles: [formats]
+
+  mavenclient:
+    image: maven:3.9-eclipse-temurin-21
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+
   helmclient:
     image: alpine/helm:3.16.2
     depends_on: [vault]

@@ -368,6 +368,25 @@ fn rpm(raw: &str) -> Route {
     Route::Done(Reply::text(404, "not found\n"))
 }
 
+// ----------------------------------------------------------------- maven
+
+/// A Maven repository is plain files. A missing POM or artifact is a wish,
+/// named `group:artifact:version`; checksums and metadata are not.
+fn maven(raw: &str) -> Route {
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::text(400, "bad request\n")) };
+    if mer_core::validate_path(&path).is_err() {
+        return Route::Done(Reply::text(404, "not found\n"));
+    }
+    let file = path.rsplit('/').next().unwrap_or("");
+    let bookkeeping = [".sha1", ".sha256", ".sha512", ".md5", ".asc"].iter().any(|e| file.ends_with(e)) || file.starts_with("maven-metadata");
+    let parts: Vec<&str> = path.split('/').collect();
+    let wish = (!bookkeeping && parts.len() >= 4).then(|| {
+        let n = parts.len();
+        format!("{}:{}:{}", parts[..n - 3].join("."), parts[n - 3], parts[n - 2])
+    });
+    Route::Mapped { path, wish }
+}
+
 // ------------------------------------------------------------ containers
 
 const API_VERSION: (&str, &str) = ("Docker-Distribution-API-Version", "registry/2.0");
@@ -517,6 +536,7 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "go" => golang(app, repo, path),
         "helm" => helm(path),
         "rpm" => rpm(path),
+        "maven" => maven(path),
         _ => Route::Unhandled,
     }
 }

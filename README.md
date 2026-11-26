@@ -6,7 +6,7 @@
 
 **Package repositories for networks that have no internet.**
 
-`mirror-every-repo` keeps apt, RPM (yum/dnf), PyPI, npm, NuGet, Cargo, Go module, Helm chart and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `dnf`, `pip`, `npm`, `dotnet`, `cargo`, `go`, `helm` and `docker` clients.
+`mirror-every-repo` keeps apt, RPM (yum/dnf), PyPI, npm, NuGet, Maven, Cargo, Go module, Helm chart and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `dnf`, `pip`, `npm`, `dotnet`, `mvn`, `cargo`, `go`, `helm` and `docker` clients.
 
 It is one binary, `mer`, written in Rust, shipped as a container image.
 
@@ -39,7 +39,7 @@ General repository managers assume both sides can talk to each other. An air gap
 
 | | |
 |---|---|
-| **Formats** | apt (Debian, Ubuntu), RPM (RHEL, Rocky, AlmaLinux, Fedora), PyPI, npm, NuGet (.NET), Cargo (Rust), Go modules, Helm charts, container images (OCI and Docker), plain files |
+| **Formats** | apt (Debian, Ubuntu), RPM (RHEL, Rocky, AlmaLinux, Fedora), PyPI, npm, NuGet (.NET), Maven (Java, Kotlin, Scala), Cargo (Rust), Go modules, Helm charts, container images (OCI and Docker), plain files |
 | **Transfer** | Removable media volumes sized to the medium; one-way UDP with RaptorQ error correction for data diodes |
 | **Integrity** | Ed25519-signed bundles with k-of-n signers, a Merkle proof per segment, SHA-256 content addressing, upstream hashes and signatures checked before anything enters a snapshot |
 | **Control** | Quarantine with review of what would change, approve or reject, atomic publish, instant rollback, hash-chained audit log |
@@ -108,6 +108,9 @@ mer npm sync npm -p express -p "@types/node@20"
 mer repo add nuget --format nuget
 mer nuget sync nuget --framework net8.0 -p Serilog.Sinks.Console -p Newtonsoft.Json@13.0.3
 
+mer repo add maven --format maven
+mer maven sync maven --from-m2 ~/.m2/repository -a com.google.guava:guava:33.3.1-jre
+
 mer repo add cargo --format cargo
 mer cargo sync cargo -c 'serde@1:derive' -c tokio@1 --lockfile Cargo.lock
 
@@ -143,6 +146,7 @@ pip install --index-url https://vault:8080/pypi/simple/ requests
 npm install --registry https://vault:8080/npm/ express
 dotnet nuget add source https://vault:8080/nuget/v3/index.json --name vault
 docker pull vault:8080/hub/library/alpine:3.20
+# mvn: ~/.m2/settings.xml with a mirror of * to https://vault:8080/maven/
 # cargo: .cargo/config.toml replaces crates.io with sparse+https://vault:8080/cargo/
 go env -w GOPROXY=https://vault:8080/go/ GOSUMDB=off GOTOOLCHAIN=local
 helm repo add vault https://vault:8080/helm/
@@ -166,6 +170,7 @@ What the collector trusts upstream depends on the format:
 | npm | TLS to the registry | Every tarball against the registry integrity hash |
 | NuGet | TLS to the feed | Every package against the SHA-512 in the feed catalog |
 | Go | TLS to the proxy and to the checksum database (or a given `go.sum`) | Every module zip and `go.mod` against its `h1:` hash |
+| Maven | TLS to the repository | Every file against the strongest checksum the repository serves (SHA-512, SHA-256 or SHA-1) |
 | Helm | TLS to the chart repository | Every chart against the SHA-256 digest in its `index.yaml` |
 | Cargo | TLS to the index | Every `.crate` against the SHA-256 in the index (and in `Cargo.lock`, when one is given) |
 | Containers | TLS for tag to digest | Every manifest, config and layer against its digest |
@@ -212,7 +217,7 @@ bash scripts/dcargo.sh clippy --workspace --all-targets -- -D warnings
 bash deploy/demo.sh
 ```
 
-The code is a Cargo workspace of small crates (`crates/`), built with Rust 1.99. Version logic for each ecosystem is tested against truth tables generated from that ecosystem's reference implementation (`dpkg`, Python's `packaging`, npm's `semver`, `NuGet.Versioning`); the generators are next to the tables in `crates/*/tests/`. Cargo requirements are matched with the `semver` crate, the library Cargo itself uses. Go version ordering and `h1:` hashes are checked against `golang.org/x/mod` and the `go` command.
+The code is a Cargo workspace of small crates (`crates/`), built with Rust 1.99. Version logic for each ecosystem is tested against truth tables generated from that ecosystem's reference implementation (`dpkg`, Python's `packaging`, npm's `semver`, `NuGet.Versioning`); the generators are next to the tables in `crates/*/tests/`. Cargo requirements are matched with the `semver` crate, the library Cargo itself uses. Go version ordering and `h1:` hashes are checked against `golang.org/x/mod` and the `go` command, RPM versions against `rpm`, Maven versions against Maven's `ComparableVersion`.
 
 Every push to `main` runs lint, the test suite and an end-to-end demo. Pushing a tag `vX.Y.Z` builds and publishes the container image, the binary and the GitHub Release.
 

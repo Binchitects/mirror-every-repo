@@ -297,6 +297,12 @@ function clientSetupDialog(r) {
       "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-<distribution>",
     ].concat(r.private ? ["username=any", "password=<token>"] : []));
     add("Install only from the vault", ["dnf --disablerepo='*' --enablerepo=vault install <package>"]);
+  } else if (r.format === "maven") {
+    add("Use the vault for everything, in ~/.m2/settings.xml", [
+      "<settings>", "  <mirrors>",
+      `    <mirror><id>vault</id><mirrorOf>*</mirrorOf><url>${base}/</url></mirror>`,
+      "  </mirrors>",
+    ].concat(r.private ? ["  <servers>", "    <server><id>vault</id><username>any</username><password>&lt;token&gt;</password></server>", "  </servers>"] : []).concat(["</settings>"]));
   } else if (r.format === "helm") {
     add("Add the vault as a chart repository", [`helm repo add vault ${base}/`, "helm search repo vault/"]);
     if (r.private) add("Token", [`helm repo add vault ${base}/ --username any --password <token>`]);

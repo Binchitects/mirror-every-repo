@@ -10,6 +10,8 @@ All notable changes to this project are recorded here. Versions follow [Semantic
 
 - **RPM** (yum and dnf): packages mirrored from one or more repositories (BaseOS and AppStream together) with what they require, through provides, files and rich dependencies. `repomd.xml` is checked against the distribution key, everything else against it; stock `dnf` installs from the vault with package signatures checked. `mer rpm sync`.
 
+- **Maven**: exactly what a local repository holds after a build on a connected machine (plugins included), or artifacts with their dependencies through POM resolution (parents, properties, dependency management, BOMs, scopes, exclusions, ranges, relocations). Files are checked against the strongest upstream checksum; stock `mvn` builds against the vault as a mirror. `mer maven sync`.
+
 ### Collector
 
 - Proxies: the collector honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and says when it uses one.

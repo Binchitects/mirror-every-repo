@@ -18,6 +18,8 @@ RS="docker compose exec -T rustclient"
 GO="docker compose exec -T goclient"
 HELM="docker compose exec -T helmclient"
 RPM="docker compose exec -T rpmclient"
+MB="docker compose exec -T mavenbuild"
+MVN="docker compose exec -T mavenclient"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK: %s\n' "$*"; }
 fail() { printf '  FAILED: %s\n' "$*"; exit 1; }
@@ -248,14 +250,68 @@ case "$OUT" in *"hello from the vault"*) ok "installed from the vault with signa
 if $RPM dnf -y -q --disablerepo='*' --enablerepo=vault install vim-enhanced >/dev/null 2>&1; then fail "vim was installable although it is not mirrored"
 else ok "a package that is not mirrored cannot be installed"; fi
 
-step "19. Containers: mirror 'alpine:3.20' from Docker Hub"
+step "19. Maven: build once on a connected machine, mirror exactly what it used, plus guava with its dependencies"
+# The project, written on both machines: commons-lang3 on the connected one,
+# commons-lang3 and guava inside the air gap.
+project() {
+  $1 sh -c 'rm -rf /tmp/app && mkdir -p /tmp/app/src/main/java/demo'
+  $1 sh -c 'cat > /tmp/app/pom.xml' <<XML
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>demo</groupId><artifactId>app</artifactId><version>1.0</version>
+  <properties><maven.compiler.release>21</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
+  <dependencies>
+    <dependency><groupId>org.apache.commons</groupId><artifactId>commons-lang3</artifactId><version>3.17.0</version></dependency>
+    $2
+  </dependencies>
+</project>
+XML
+  $1 sh -c 'cat > /tmp/app/src/main/java/demo/Main.java' <<JAVA
+package demo;
+public class Main {
+  public static void main(String[] a) {
+    System.out.println(org.apache.commons.lang3.StringUtils.capitalize("hello from the vault") $3);
+  }
+}
+JAVA
+}
+GUAVA='<dependency><groupId>com.google.guava</groupId><artifactId>guava</artifactId><version>33.3.1-jre</version></dependency>'
+project "$MB" "" ""
+$MB sh -c 'cd /tmp/app && mvn -B -q package -Dmaven.repo.local=/tmp/m2' 2>&1 | tail -3 | sed 's/^/  | /'
+$MB sh -c 'find /tmp/m2 -name "*.jar" | wc -l' | tr -d '\r' | sed 's/^/  jars the connected build used: /'
+rm -rf /tmp/mer-demo-m2 && docker compose cp mavenbuild:/tmp/m2 /tmp/mer-demo-m2 >/dev/null
+docker compose cp /tmp/mer-demo-m2 collector:/tmp/m2 >/dev/null && rm -rf /tmp/mer-demo-m2
+$C mer repo add maven --format maven
+$C mer maven sync maven --from-m2 /tmp/m2 -a com.google.guava:guava:33.3.1-jre | grep -v "^  WARNING" | tail -3
+carry
+
+step "20. Maven: build and run with a stock mvn that can only reach the vault"
+$MVN timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "maven client can reach the internet" || ok "maven client cannot reach the internet"
+$MVN sh -c 'mkdir -p /root/.m2 && cat > /root/.m2/settings.xml' <<'XML'
+<settings>
+  <mirrors>
+    <mirror><id>vault</id><mirrorOf>*</mirrorOf><url>http://vault:8080/maven/</url><blocked>false</blocked></mirror>
+  </mirrors>
+</settings>
+XML
+project "$MVN" "$GUAVA" '+ " " + com.google.common.collect.ImmutableList.of(1, 2, 3)'
+$MVN sh -c 'cd /tmp/app && mvn -B -q package' 2>&1 | tail -5 | sed 's/^/  | /'
+OUT=$($MVN sh -c 'cd /tmp/app && java -cp "target/classes:$(find /root/.m2 -name "*.jar" | tr "\n" ":")" demo.Main' 2>&1 | tr -d '\r')
+case "$OUT" in *"Hello from the vault [1, 2, 3]"*) ok "built from the vault and ran: $OUT" ;; *) echo "$OUT"; fail "the program did not run" ;; esac
+$V sh -c 'grep "/maven/" /tmp/http.log | grep -c " 404 " || true' | tr -d '\r' | sed 's/^/  maven requests answered 404 (checksum and metadata probes): /'
+$MVN sh -c "cd /tmp/app && sed -i 's#</dependencies>#<dependency><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId><version>2.0.16</version></dependency></dependencies>#' pom.xml"
+if $MVN sh -c 'cd /tmp/app && mvn -B -q package' >/dev/null 2>&1; then fail "slf4j was usable although it is not mirrored"
+else ok "an artifact that is not mirrored cannot be used"; fi
+case "$($V mer wishlist)" in *"org.slf4j:slf4j-api:2.0.16"*) ok "the request for slf4j-api is on the wishlist" ;; *) $V mer wishlist; fail "slf4j-api is not on the wishlist" ;; esac
+
+step "21. Containers: mirror 'alpine:3.20' from Docker Hub"
 $C mer repo add hub --format oci
 SYNC=$($C mer oci sync hub -i library/alpine:3.20 | tr -d '\r')
 echo "$SYNC"
 UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
 carry
 
-step "20. Containers: pull and run with a real Docker engine, from the vault only"
+step "22. Containers: pull and run with a real Docker engine, from the vault only"
 # The vault itself has no published ports (its network is internal), so a
 # second server process on the same vault data is exposed on localhost for
 # the Docker engine of this machine. The image is pulled under a name that
@@ -276,7 +332,7 @@ case "$($V mer wishlist)" in *"images/library/busybox:latest"*) ok "the request 
 docker rmi -f "$IMG" >/dev/null 2>&1 || true
 docker rm -f mer-registry >/dev/null 2>&1 || true
 
-step "21. vault: state and integrity"
+step "23. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log' | sed 's/^/  requests answered with 200: /'

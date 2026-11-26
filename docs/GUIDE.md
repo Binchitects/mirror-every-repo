@@ -19,7 +19,7 @@ This guide takes you from nothing to a working mirror across an air gap, then co
 |---|---|
 | **collector** | The host on the internet side. Mirrors upstreams and produces bundles. |
 | **vault** | The host inside the air gap. Imports bundles and serves clients. |
-| **repo** | One repository of one format (`apt`, `rpm`, `pypi`, `npm`, `nuget`, `cargo`, `go`, `helm`, `oci`, `raw`). |
+| **repo** | One repository of one format (`apt`, `rpm`, `pypi`, `npm`, `nuget`, `maven`, `cargo`, `go`, `helm`, `oci`, `raw`). |
 | **snapshot** | An immutable state of a repo, numbered per repo. Clients only ever see one whole snapshot. |
 | **bundle** | A signed file set holding what changed in all repos since the previous bundle. Numbered per channel. |
 | **channel** | One collector-to-vault stream of bundles. The default channel is enough unless one collector feeds several vaults. |
@@ -154,6 +154,19 @@ mer nuget sync nuget --framework net8.0 -p Serilog.Sinks.Console -p Newtonsoft.J
 - `--framework` is the target framework of your projects (`net8.0`, `netstandard2.0`, `net48`); repeat it for several.
 - A package without a version means the newest listed stable one. `Id@1.2.3` means that version or the next higher one that exists, which is how NuGet reads a version. `Id@[1.2.3]` means exactly that version.
 - Packages a build pulls in implicitly (runtime packs for self-contained publish, analyzers) have to be named.
+
+### Maven (Java, Kotlin, Scala)
+
+```text
+mer repo add maven --format maven
+# on a connected machine, build your projects once: mvn package -Dmaven.repo.local=/tmp/m2
+mer maven sync maven --from-m2 /tmp/m2
+mer maven sync maven --from-m2 /tmp/m2 -a com.google.guava:guava:33.3.1-jre
+```
+
+- `--from-m2` mirrors exactly what a local repository holds after a build. A Maven build needs plugins (compiler, surefire, jar and their dependencies) as much as libraries, and which ones depends on the Maven version and the project, so this is the most reliable way to make projects build inside the air gap. Build with the same Maven version the air-gapped machines use.
+- `-a group:artifact:version` mirrors an artifact with its compile and runtime dependencies, following POMs through parents, properties, dependency management, imported BOMs, exclusions, version ranges and relocations. Test, provided and optional dependencies are left out. `group:artifact` alone means the newest release. Use `group:artifact:ext:classifier:version` for other files.
+- Every file is checked against the strongest checksum the upstream repository serves (SHA-512, SHA-256 or SHA-1). The vault adds `.sha1` files and version metadata for what it holds.
 
 ### Cargo (Rust)
 
@@ -307,6 +320,7 @@ Client configuration, with `vault:8080` as the package listener:
 | pip | `pip install --index-url https://vault:8080/pypi/simple/ <package>`, or `index-url` in `pip.conf`. |
 | npm | `npm config set registry https://vault:8080/npm/`. Use `npm install --no-audit`: the vault has no audit service. |
 | dotnet | `dotnet nuget add source https://vault:8080/nuget/v3/index.json --name vault`, and remove the default source. Restore works; searching for packages does not. |
+| mvn | In `~/.m2/settings.xml`, a mirror `<mirrorOf>*</mirrorOf>` with `<url>https://vault:8080/maven/</url>`. Gradle: a `maven { url = uri("https://vault:8080/maven/") }` repository. |
 | cargo | In `.cargo/config.toml`: `[source.crates-io]` `replace-with = "vault"` and `[source.vault]` `registry = "sparse+https://vault:8080/cargo/"`. Build works; `cargo search` and `cargo publish` do not. |
 | go | `go env -w GOPROXY=https://vault:8080/go/ GOSUMDB=off GOTOOLCHAIN=local`. Downloads, `go mod tidy` and `go build` work; `go` still checks everything against the project's `go.sum`. |
 | helm | `helm repo add vault https://vault:8080/helm/`, then `helm install` or `helm pull vault/<chart>` as usual. |
@@ -359,12 +373,13 @@ A token without `--repo` is valid for every repo. Clients send the token as a pa
 | pip | `index-url = https://token:<token>@vault:8080/pypi/simple/` |
 | npm | `.npmrc`: `//vault:8080/npm/:_authToken=<token>` |
 | dotnet | `dotnet nuget add source ... --username any --password <token> --store-password-in-clear-text` |
+| mvn | A `<server>` with the mirror's `<id>`, any `<username>` and the token as `<password>` in `settings.xml` |
 | cargo | In `.cargo/config.toml`, define the vault as `[registries.vault]` `index = "sparse+https://vault:8080/cargo/"` (instead of `[source.vault]`), keep `replace-with = "vault"`, and add `[registry]` `global-credential-providers = ["cargo:token"]`. Put the token in `~/.cargo/credentials.toml` as `[registries.vault]` `token = "<token>"`, or in `CARGO_REGISTRIES_VAULT_TOKEN`. `cargo login` does not work, because the vault has no registry API. |
 | go | `~/.netrc`: `machine vault:8080 login go password <token>` (the machine name includes the port). Go sends credentials only over HTTPS, so a private Go repo needs the vault on TLS. |
 | helm | `helm repo add vault https://vault:8080/helm/ --username any --password <token>` |
 | docker | `docker login vault:8080` with any user name and the token as password |
 
-The apt, Cargo, Go and Helm flows are tested end to end with real clients. The others rely on the same Basic and Bearer handling, which is covered by the server's tests. Cargo sends the token on its own, without `Bearer`, which the vault also accepts.
+The apt, Cargo, Go and Helm flows are tested end to end with real clients, as are open Maven and RPM repositories. The others rely on the same Basic and Bearer handling, which is covered by the server's tests. Cargo sends the token on its own, without `Bearer`, which the vault also accepts.
 
 ## Day-to-day operation
 
@@ -410,6 +425,7 @@ Garbage collection only removes content that has been unreferenced for the grace
 | go: an error about a newer Go toolchain | A module asks for a newer Go than the client has, and go tries to download one | `go env -w GOTOOLCHAIN=local`, and use an older version of that module or a newer Go |
 | dnf: `GPG check FAILED` or `public key ... is not installed` | The client does not have the distribution key | Point `gpgkey=` at the distribution's key file, which the distribution's own images ship in `/etc/pki/rpm-gpg/` |
 | `repomd.xml does not verify` on the collector | The keyring is not the key that signed the repository | Use the distribution's key for that release (for example `RPM-GPG-KEY-Rocky-9`) |
+| mvn: `Could not resolve dependencies` or `Plugin ... could not be resolved` | The artifact or plugin is not mirrored | It is on the wishlist; build the project once on a connected machine and sync with `--from-m2` |
 | pip: `is not a trusted or secure host` | pip refuses plain HTTP indexes | Serve with TLS, or pass `--trusted-host` |
 | Sync warns `depends on X, which upstream does not provide` | A dependency could not be satisfied in that upstream | Usually harmless for optional items; otherwise add the upstream or component that has it |
 | The panel says no user exists yet | A fresh vault has no accounts | `mer user add admin --role admin` on the vault host |

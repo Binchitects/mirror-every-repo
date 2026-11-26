@@ -1,0 +1,23 @@
+[package]
+name = "mer-format-maven"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-blob.workspace = true
+mer-meta.workspace = true
+mer-storage.workspace = true
+mer-fetch.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+hex.workspace = true
+quick-xml.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tiny_http.workspace = true

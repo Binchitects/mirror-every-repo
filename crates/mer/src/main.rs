@@ -108,6 +108,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: RpmCmd,
     },
+    /// Maven repositories for Java and other JVM languages (collector side).
+    Maven {
+        #[command(subcommand)]
+        cmd: MavenCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -385,6 +390,30 @@ enum RpmCmd {
         /// against, for example RPM-GPG-KEY-Rocky-9.
         #[arg(long)]
         keyring: Option<PathBuf>,
+        /// Additional host the collector may contact (repeatable).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum MavenCmd {
+    /// Mirror Maven artifacts into a new snapshot of a maven repo.
+    Sync {
+        repo: String,
+        /// Upstream repository root.
+        #[arg(long, default_value = "https://repo.maven.apache.org/maven2")]
+        upstream: String,
+        /// Artifact to mirror with its compile and runtime dependencies
+        /// (repeatable): com.google.guava:guava:33.3.1-jre, or group:artifact
+        /// for the newest release.
+        #[arg(long = "artifact", short = 'a')]
+        artifacts: Vec<String>,
+        /// A local repository (~/.m2/repository) filled by a build on a
+        /// connected machine: exactly what it holds is mirrored, build
+        /// plugins included (repeatable).
+        #[arg(long = "from-m2")]
+        m2_dirs: Vec<PathBuf>,
         /// Additional host the collector may contact (repeatable).
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
@@ -1362,6 +1391,32 @@ fn main() -> Result<()> {
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.upstreams.join(", "), hosts.join(", "));
                 let rep = mer_format_rpm::sync(&st, &repo, &client, &cfg)?;
                 println!("{} packages; downloaded {} ({}), {} already in the store", rep.packages, rep.downloaded, human(rep.downloaded_bytes), rep.reused);
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Maven { cmd } => match cmd {
+            MavenCmd::Sync { repo, upstream, artifacts, m2_dirs, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                hosts.push(mer_fetch::host_of(&upstream).ok_or_else(|| anyhow!("{upstream:?} is not an http(s) URL"))?);
+                let client = http_client(&hosts);
+                let cfg = mer_format_maven::MavenConfig { repo: upstream, artifacts, m2_dirs };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.repo, hosts.join(", "));
+                let rep = mer_format_maven::sync(&st, &repo, &client, &cfg)?;
+                println!(
+                    "{} files; downloaded {} ({}), {} already in the store, {} without a checksum",
+                    rep.files,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused,
+                    rep.unverified
+                );
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");
                 }

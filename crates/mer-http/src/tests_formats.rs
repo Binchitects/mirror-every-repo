@@ -482,3 +482,14 @@ fn rpm_repositories_are_served_the_way_dnf_asks_for_them() {
     }
     assert_eq!(wishes(&r), vec![("vim-9.0-1.el9.x86_64".to_string(), 1)]);
 }
+
+#[test]
+fn maven_repositories_are_served_the_way_maven_asks_for_them() {
+    let r = rig("m2", "maven", &[("org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar", b"jar"), ("org/slf4j/slf4j-api/maven-metadata.xml", b"<metadata/>")]);
+    assert_eq!(get(&r, "/m2/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar").1, "jar");
+    assert_eq!(get(&r, "/m2/org/slf4j/slf4j-api/maven-metadata.xml").0, 200);
+    for path in ["/m2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.pom", "/m2/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar.md5", "/m2/org/x/maven-metadata.xml", "/m2/a/..%2f..%2fmeta.db"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![("com.google.guava:guava:33.3.1-jre".to_string(), 1)]);
+}
