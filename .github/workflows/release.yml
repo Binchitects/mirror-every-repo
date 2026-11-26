@@ -37,22 +37,27 @@ jobs:
     name: Linux binary
     needs: verify
     runs-on: ubuntu-latest
-    # Built on Debian 12 so the binary runs on any distribution with
-    # glibc 2.36 or newer.
+    # A static (musl) binary: it runs on any x86-64 Linux, whatever its
+    # glibc (RHEL 8 and 9, Ubuntu 20.04 and later, Debian, Alpine).
     container: rust:1.99-bookworm
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --locked -p mer
+        run: |
+          apt-get update -qq && apt-get install -y -qq musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --release --locked -p mer --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/mer target/release-mer
       - name: Package
         run: |
           name="mer-${GITHUB_REF_NAME}-linux-x86_64"
           mkdir "$name"
-          cp target/release/mer LICENSE README.md CHANGELOG.md "$name/"
+          cp target/release-mer "$name/mer"
+          cp LICENSE README.md CHANGELOG.md "$name/"
           tar -czf "$name.tar.gz" "$name"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
-          ./target/release/mer --version
+          "$name/mer" --version
       - uses: actions/upload-artifact@v4
         with:
           name: binary
@@ -100,6 +105,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: binary
+      - name: Installer
+        run: cp deploy/install.sh install.sh && sha256sum install.sh > install.sh.sha256
       - name: Release notes from CHANGELOG.md
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -118,6 +125,12 @@ jobs:
             echo '```'
             echo
             echo "Or download the Linux binary below and check it against the \`.sha256\` file."
+            echo
+            echo "Install a vault or a collector with one command (as root):"
+            echo
+            echo '```bash'
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh | bash -s -- vault"
+            echo '```'
           } >> notes.md
           test -s notes.md
           cat notes.md
@@ -128,4 +141,6 @@ jobs:
           files: |
             mer-*.tar.gz
             mer-*.tar.gz.sha256
+            install.sh
+            install.sh.sha256
           fail_on_unmatched_files: true

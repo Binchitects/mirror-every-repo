@@ -29,7 +29,7 @@ carry() {
   SEQ=$((SEQ + 1))
   $C mer export seal --key /keys/bundle.key | tail -1
   $C mer export media --seq "$SEQ" --out "/media/b$SEQ" --volume-size 512M >/dev/null
-  $V mer import media "/media/b$SEQ" --auto-publish | tail -2
+  $V mer import media "/media/b$SEQ" --auto-publish | grep -v "already up to date"
 }
 
 step "1. build the image and start the nodes"
@@ -295,7 +295,13 @@ $MVN sh -c 'mkdir -p /root/.m2 && cat > /root/.m2/settings.xml' <<'XML'
 </settings>
 XML
 project "$MVN" "$GUAVA" '+ " " + com.google.common.collect.ImmutableList.of(1, 2, 3)'
-$MVN sh -c 'cd /tmp/app && mvn -B -q package' 2>&1 | tail -5 | sed 's/^/  | /'
+if ! $MVN sh -c 'cd /tmp/app && mvn -B -q package' > /tmp/mer-demo-mvn.log 2>&1; then
+  grep -E "ERROR|Could not|Failed" /tmp/mer-demo-mvn.log | head -20 | sed 's/^/  | /'
+  $V sh -c 'grep "/maven/" /tmp/http.log | grep -v " 200 " | tail -20' | sed 's/^/  vault | /'
+  $V mer status | sed 's/^/  vault | /'
+  fail "mvn package failed"
+fi
+rm -f /tmp/mer-demo-mvn.log
 OUT=$($MVN sh -c 'cd /tmp/app && java -cp "target/classes:$(find /root/.m2 -name "*.jar" | tr "\n" ":")" demo.Main' 2>&1 | tr -d '\r')
 case "$OUT" in *"Hello from the vault [1, 2, 3]"*) ok "built from the vault and ran: $OUT" ;; *) echo "$OUT"; fail "the program did not run" ;; esac
 $V sh -c 'grep "/maven/" /tmp/http.log | grep -c " 404 " || true' | tr -d '\r' | sed 's/^/  maven requests answered 404 (checksum and metadata probes): /'

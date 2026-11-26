@@ -59,15 +59,26 @@ cd mirror-every-repo
 bash deploy/demo-apt.sh
 ```
 
-The script starts a collector, a vault on a network with no route out, and a stock Debian client that can reach only the vault. It mirrors `hello` from Debian, carries it across as removable media, installs it with `apt-get`, sends a second bundle through the one-way link, and checks every step. `deploy/demo-formats.sh` does the same for pip, npm, dotnet and docker.
+The script starts a collector, a vault on a network with no route out, and a stock Debian client that can reach only the vault. It mirrors `hello` from Debian, carries it across as removable media, installs it with `apt-get`, sends a second bundle through the one-way link, and checks every step. `deploy/demo-formats.sh` does the same for pip, npm, dotnet, mvn, cargo, go, helm, dnf and docker.
 
 ## Install
 
+One command per machine, as root, on any systemd Linux (Debian, Ubuntu, RHEL, Rocky, AlmaLinux, Fedora, SUSE):
+
 ```bash
-docker pull ghcr.io/binchitects/mirror-every-repo:1.1.0
+# on the internet side
+curl -fsSL https://github.com/Binchitects/mirror-every-repo/releases/latest/download/install.sh | bash -s -- collector
+# inside the air gap (copy install.sh and the release archive across; see below)
+bash install.sh vault --binary ./mer --trust <collector public key>
 ```
 
-The image contains the `mer` binary and runs as an unprivileged user with its data in `/data`. A Linux x86-64 binary is attached to each [release](https://github.com/Binchitects/mirror-every-repo/releases).
+The installer verifies the download against its checksum, installs what it needs, creates a `mer` service user, generates the keys (collector) or a TLS certificate and the first administrator (vault), sets up a hardened systemd service, and prints what to do next. Run it again to upgrade; `--uninstall` removes it. The binary is static and runs on any x86-64 Linux. For machines without internet access, download `install.sh` and `mer-<version>-linux-x86_64.tar.gz` from the [release](https://github.com/Binchitects/mirror-every-repo/releases), carry them across, extract the archive and pass `--binary`.
+
+The container image is the other way to run it:
+
+```bash
+docker pull ghcr.io/binchitects/mirror-every-repo:1.2.0
+```
 
 To build from source, see [Development](#development).
 

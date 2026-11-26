@@ -31,7 +31,7 @@
 | `mer-http` | HTTP(S) server: serves the published snapshot of each repo (range and conditional requests, token check for private repos), the client conventions of pip, npm, dotnet, cargo, go, helm and container engines (including the pull side of the registry API under `/v2/`), the web panel under `/ui/` with its JSON API under `/api/`, download statistics, `/metrics`, `/healthz` |
 | `mer` | Command-line binary for both roles |
 
-Run all tests with `bash scripts/dcargo.sh test --workspace`. Three end-to-end demos run in containers:
+Run all tests with `bash scripts/dcargo.sh test --workspace`. `deploy/install.sh` installs a vault or a collector as a systemd service; it is tested on Debian 12 and Rocky Linux 9 (install, upgrade, a full sync-export-import-serve loop, uninstall). `scripts/release.sh` builds and publishes a release from a tag without the hosted CI runners. Release binaries are static and run on any x86-64 Linux. Three end-to-end demos run in containers:
 
 - `bash deploy/demo.sh`: raw files over removable media and the diode link.
 - `bash deploy/demo-apt.sh`: packages mirrored from deb.debian.org, carried across, and installed with a stock `apt-get` on a machine with no internet access.

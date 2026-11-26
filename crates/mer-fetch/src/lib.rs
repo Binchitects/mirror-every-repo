@@ -333,6 +333,39 @@ mod tests {
     }
 
     #[test]
+    fn transient_failures_are_retried() {
+        // Answers 503 twice, then 200; and 502 once for /flaky.
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", server.server_addr().to_ip().unwrap());
+        std::thread::spawn(move || {
+            let (mut busy, mut dropped) = (0, 0);
+            for req in server.incoming_requests() {
+                match req.url() {
+                    "/busy" if busy < 2 => {
+                        busy += 1;
+                        let _ = req.respond(tiny_http::Response::from_string("later").with_status_code(503));
+                    }
+                    "/flaky" if dropped < 1 => {
+                        dropped += 1;
+                        let _ = req.respond(tiny_http::Response::from_string("bad gateway").with_status_code(502));
+                    }
+                    "/gone" => {
+                        let _ = req.respond(tiny_http::Response::from_string("no").with_status_code(404));
+                    }
+                    _ => {
+                        let _ = req.respond(tiny_http::Response::from_string("ok"));
+                    }
+                }
+            }
+        });
+        let client = HttpClient::new(&[host_of(&base).unwrap()]).without_retry_delay();
+        assert_eq!(client.get(&format!("{base}/busy"), &[]).unwrap().bytes("busy", 10).unwrap(), b"ok");
+        assert_eq!(client.get(&format!("{base}/flaky"), &[]).unwrap().bytes("flaky", 10).unwrap(), b"ok");
+        assert!(matches!(client.get(&format!("{base}/gone"), &[]), Err(FetchError::NotFound(_))), "a 404 is an answer, not retried");
+        assert!(matches!(HttpClient::new(&["127.0.0.1:1".into()]).without_retry_delay().get("http://127.0.0.1:1/x", &[]), Err(FetchError::Transport { .. })));
+    }
+
+    #[test]
     fn spec_selects_the_kind() {
         let dir = mirror();
         assert_eq!(upstream_from(dir.path().to_str().unwrap()).unwrap().describe(), dir.path().display().to_string());

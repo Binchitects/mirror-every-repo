@@ -12,7 +12,15 @@ All notable changes to this project are recorded here. Versions follow [Semantic
 
 - **Maven**: exactly what a local repository holds after a build on a connected machine (plugins included), or artifacts with their dependencies through POM resolution (parents, properties, dependency management, BOMs, scopes, exclusions, ranges, relocations). Files are checked against the strongest upstream checksum; stock `mvn` builds against the vault as a mirror. `mer maven sync`.
 
+### Installation and releases
+
+- `install.sh`: one command installs a vault or a collector as a hardened systemd service, with keys, a TLS certificate and the first administrator, and prints the next steps. It upgrades in place and uninstalls. It is attached to every release.
+- Release binaries are static (musl): they run on any x86-64 Linux, RHEL 8 and 9 and Ubuntu 20.04 included.
+- `scripts/release.sh` builds, checks and publishes a release from a tag on any machine with Docker.
+
 ### Collector
+
+- Requests that fail in transit, or that the server turns away for now (429, 502, 503, 504), are retried three times with growing waits.
 
 - Proxies: the collector honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and says when it uses one.
 - `mer apt sync --allow-host` for mirrors that redirect downloads to another host.

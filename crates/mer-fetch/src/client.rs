@@ -7,6 +7,11 @@ use std::time::Duration;
 /// Redirects followed for one request, as browsers and curl allow.
 const MAX_REDIRECTS: usize = 5;
 
+/// Waits before retrying a request that failed in transit (connection or TLS
+/// trouble) or that the server turned away for now (429, 502, 503, 504).
+/// A failure while reading the body is not retried here.
+const RETRY_DELAYS_MS: [u64; 3] = [500, 2_000, 6_000];
+
 /// Resolve a `Location` header against the URL that answered with it.
 pub(crate) fn resolve(base: &str, location: &str) -> Option<String> {
     let location = location.trim();
@@ -38,6 +43,8 @@ pub struct HttpClient {
     via_http: Option<(String, ureq::Agent)>,
     no_proxy: Vec<String>,
     allowed: Vec<String>,
+    /// Multiplies the retry waits (0 in tests).
+    retry_scale: u64,
 }
 
 /// Proxy settings, as `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` give them.
@@ -141,7 +148,14 @@ impl HttpClient {
             via_http: p.http.as_ref().map(|u| agent(Some(u)).map(|a| (u.clone(), a))).transpose()?,
             no_proxy: p.no_proxy.clone(),
             allowed: allowed.iter().map(|h| h.to_ascii_lowercase()).collect(),
+            retry_scale: 1,
         })
+    }
+
+    /// Retry without waiting (for tests).
+    pub fn without_retry_delay(mut self) -> Self {
+        self.retry_scale = 0;
+        self
     }
 
     /// The proxy a request to `url` goes through, if any.
@@ -183,16 +197,31 @@ impl HttpClient {
                 return Err(FetchError::BadPath(current));
             }
             let same_host = host_of(&current) == first_host;
-            let mut req = self.route(&current).1.get(&current);
-            for (k, v) in headers {
-                if same_host || !k.eq_ignore_ascii_case("authorization") {
-                    req = req.set(k, v);
+            let mut attempt = 0;
+            let resp = loop {
+                let mut req = self.route(&current).1.get(&current);
+                for (k, v) in headers {
+                    if same_host || !k.eq_ignore_ascii_case("authorization") {
+                        req = req.set(k, v);
+                    }
                 }
-            }
-            let resp = match req.call() {
-                Ok(r) => r,
-                Err(ureq::Error::Status(_, r)) => r,
-                Err(e) => return Err(FetchError::Transport { path: current, reason: e.to_string() }),
+                let outcome = match req.call() {
+                    Ok(r) => Ok(r),
+                    Err(ureq::Error::Status(_, r)) => Ok(r),
+                    Err(e) => Err(e.to_string()),
+                };
+                let again = match &outcome {
+                    Ok(r) => matches!(r.status(), 429 | 502 | 503 | 504),
+                    Err(_) => true,
+                };
+                if !again || attempt == RETRY_DELAYS_MS.len() {
+                    match outcome {
+                        Ok(r) => break r,
+                        Err(reason) => return Err(FetchError::Transport { path: current, reason }),
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(self.retry_scale * RETRY_DELAYS_MS[attempt]));
+                attempt += 1;
             };
             let status = resp.status();
             if matches!(status, 301 | 302 | 303 | 307 | 308) {

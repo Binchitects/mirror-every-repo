@@ -29,10 +29,40 @@ Both sides run the same binary, `mer`, and keep everything in one data directory
 
 ## Install
 
-The container image is the supported way to run it.
+### With the installer
+
+On each machine, as root:
 
 ```bash
-docker pull ghcr.io/binchitects/mirror-every-repo:1.1.0
+# collector (internet side)
+curl -fsSL https://github.com/Binchitects/mirror-every-repo/releases/latest/download/install.sh | bash -s -- collector
+
+# vault (inside the air gap): carry install.sh and the release archive across first
+tar -xzf mer-v1.2.0-linux-x86_64.tar.gz
+bash install.sh vault --binary mer-v1.2.0-linux-x86_64/mer --trust <collector public key>
+```
+
+What it sets up:
+
+| | Collector | Vault |
+|---|---|---|
+| Program | `/usr/local/lib/mer/mer`, and `/usr/local/bin/mer`, which runs it as the `mer` user (`sudo mer status`) | the same |
+| Data | `/var/lib/mer` | `/var/lib/mer` |
+| Keys | bundle signing key and apt site key in `/var/lib/mer/keys` (its public key is printed) | trust file `/var/lib/mer/trust.txt` from `--trust` |
+| TLS | | a self-signed certificate in `/etc/mer/tls` (or yours, with `--tls-cert` and `--tls-key`) |
+| Service | `mer-sync.timer` runs `/etc/mer/sync.sh` daily: edit it to say what to mirror | `mer-vault.service` (`mer serve` on port 8443) |
+| First login | | user `admin`, password printed once and kept in `/etc/mer/admin-password` until you delete it |
+
+Options: `--version` picks a release, `--listen` and `--admin-listen` set the vault's addresses, `--no-tls` serves plain HTTP, `--data` moves the data directory, `--no-start` installs without starting. Running the installer again upgrades the program and keeps everything else. `--uninstall` removes the program and services; add `--purge` to delete the data and keys too.
+
+Exports are written to `/var/lib/mer/outbox`, because the service user cannot write to a disk mounted by root: `sudo mer export media --seq 1 --out /var/lib/mer/outbox/b1`, then copy `b1` to the disk.
+
+The collector honours `HTTPS_PROXY` and `NO_PROXY`; for the timer, add them to `mer-sync.service` with `systemctl edit mer-sync`.
+
+### With the container image
+
+```bash
+docker pull ghcr.io/binchitects/mirror-every-repo:1.2.0
 ```
 
 The image's entry point is `mer`. It runs as user id 10001 and expects two volumes: `/data` for the store and database, `/keys` for key files.
@@ -43,7 +73,7 @@ A long-running container per side, with a shell alias, keeps the rest of this gu
 docker run -d --name mer --restart unless-stopped \
   -v mer-data:/data -v mer-keys:/keys -v /mnt/usb:/media \
   -p 8080:8080 -p 9000:9000/udp \
-  --entrypoint sleep ghcr.io/binchitects/mirror-every-repo:1.1.0 infinity
+  --entrypoint sleep ghcr.io/binchitects/mirror-every-repo:1.2.0 infinity
 ```
 
 ```bash
@@ -302,7 +332,7 @@ Run the server on the vault:
 ```bash
 docker run -d --name mer --restart unless-stopped \
   -v mer-data:/data -v mer-keys:/keys -p 8080:8080 -p 8443:8443 \
-  ghcr.io/binchitects/mirror-every-repo:1.1.0 \
+  ghcr.io/binchitects/mirror-every-repo:1.2.0 \
   serve --listen 0.0.0.0:8080 --admin-listen 0.0.0.0:8443 \
         --tls-cert /keys/tls.crt --tls-key /keys/tls.key
 ```
