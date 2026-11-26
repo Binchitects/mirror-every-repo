@@ -127,7 +127,7 @@ pub fn sync(st: &Storage, repo: &str, client: &HttpClient, cfg: &HelmConfig) -> 
 
     // 1. The upstream index.
     let url = format!("{base}/index.yaml");
-    let body = client.get(&url, &[])?.bytes(&url, MAX_INDEX)?;
+    let body = client.get_bytes(&url, &[], MAX_INDEX)?;
     let text = String::from_utf8(body).map_err(|_| up("index.yaml is not UTF-8"))?;
     let docs = YamlLoader::load_from_str(&text).map_err(|e| up(format!("index.yaml: {e}")))?;
     let index = docs.first().map(to_json).unwrap_or(Value::Null);

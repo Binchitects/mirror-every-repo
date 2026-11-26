@@ -258,6 +258,21 @@ impl HttpClient {
         unreachable!("the loop returns on its last hop")
     }
 
+    /// GET a whole body. A body that breaks off or stalls mid-way is fetched
+    /// again (the request itself is already retried by `get_any`).
+    pub fn get_bytes(&self, url: &str, headers: &[(&str, &str)], limit: u64) -> Result<Vec<u8>, FetchError> {
+        let mut attempt = 0;
+        loop {
+            match self.get(url, headers)?.bytes(url, limit) {
+                Err(FetchError::Transport { .. }) if attempt < RETRY_DELAYS_MS.len() => {
+                    std::thread::sleep(Duration::from_millis(self.retry_scale * RETRY_DELAYS_MS[attempt]));
+                    attempt += 1;
+                }
+                other => return other,
+            }
+        }
+    }
+
     /// GET that must succeed: 404 and other error statuses become errors.
     pub fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse, FetchError> {
         let resp = self.get_any(url, headers)?;

@@ -123,6 +123,20 @@ impl Upstream for HttpUpstream {
     fn describe(&self) -> String {
         self.base.clone()
     }
+
+    /// Whole files are fetched again when they break off mid-way.
+    fn read(&self, path: &str, limit: u64) -> Result<Vec<u8>, FetchError> {
+        check(path)?;
+        if !path.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-._~+%=@:,".contains(&b)) {
+            return Err(FetchError::BadPath(path.to_string()));
+        }
+        match self.client.get_bytes(&format!("{}/{}", self.base, path), &[], limit) {
+            Err(FetchError::NotFound(_)) => Err(FetchError::NotFound(path.into())),
+            Err(FetchError::Http { status, .. }) => Err(FetchError::Http { path: path.into(), status }),
+            Err(FetchError::TooLarge { limit, .. }) => Err(FetchError::TooLarge { path: path.into(), limit }),
+            other => other,
+        }
+    }
 }
 
 /// `http://...` or `https://...` is a remote mirror; anything else is a directory.
@@ -393,6 +407,29 @@ mod tests {
             assert_eq!(body, b"ok");
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "each request used a fresh connection");
+    }
+
+    #[test]
+    fn a_body_that_breaks_off_is_fetched_again() {
+        // First answer: promises 10 bytes, sends 4 and hangs up. Then whole.
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for (n, conn) in listener.incoming().flatten().enumerate() {
+                let mut reader = BufReader::new(conn.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|k| k > 2) {
+                    line.clear();
+                }
+                let mut w = conn;
+                let body: &[u8] = if n == 0 { b"0123" } else { b"0123456789" };
+                let _ = w.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n");
+                let _ = w.write_all(body);
+            }
+        });
+        let client = HttpClient::new(&[addr.to_string()]).without_retry_delay();
+        assert_eq!(client.get_bytes(&format!("http://{addr}/f"), &[], 100).unwrap(), b"0123456789");
     }
 
     #[test]

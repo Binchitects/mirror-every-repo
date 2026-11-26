@@ -158,8 +158,8 @@ impl Remote<'_> {
             }
         }
         let url = format!("{}/{path}", self.base);
-        let body = match self.client.get(&url, &[]) {
-            Ok(r) => r.bytes(&url, MAX_FILE)?,
+        let body = match self.client.get_bytes(&url, &[], MAX_FILE) {
+            Ok(b) => b,
             Err(FetchError::NotFound(_)) => return Ok(false),
             Err(e) => return Err(e.into()),
         };
@@ -230,8 +230,8 @@ impl Remote<'_> {
     /// Versions upstream lists for an artifact.
     fn versions(&mut self, g: &str, a: &str) -> Result<Vec<String>, MavenError> {
         let url = format!("{}/{}/{a}/maven-metadata.xml", self.base, g.replace('.', "/"));
-        let body = match self.client.get(&url, &[]) {
-            Ok(r) => r.bytes(&url, MAX_POM)?,
+        let body = match self.client.get_bytes(&url, &[], MAX_POM) {
+            Ok(b) => b,
             Err(FetchError::NotFound(_)) => return Ok(vec![]),
             Err(e) => return Err(e.into()),
         };

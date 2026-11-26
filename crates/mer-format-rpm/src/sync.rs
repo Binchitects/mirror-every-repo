@@ -115,7 +115,7 @@ fn metadata(client: &HttpClient, base: &str, d: &DataRef) -> Result<String, RpmE
     if !d.href.starts_with("repodata/") || mer_core::validate_path(&d.href).is_err() {
         return Err(up(format!("repomd.xml names {:?}", d.href)));
     }
-    let body = client.get(&url, &[])?.bytes(&url, MAX_METADATA)?;
+    let body = client.get_bytes(&url, &[], MAX_METADATA)?;
     if matches(&d.checksum.0, &d.checksum.1, &body) != Some(true) {
         return Err(up(format!("{url}: does not match its {} checksum in repomd.xml (SHA-256 and SHA-512 are accepted)", d.checksum.0)));
     }
@@ -324,11 +324,11 @@ pub fn sync(st: &Storage, repo: &str, client: &HttpClient, cfg: &RpmConfig) -> R
             return Err(RpmError::Config(format!("{u:?} is not an http(s) URL")));
         }
         let url = format!("{base}/repodata/repomd.xml");
-        let raw = client.get(&url, &[])?.bytes(&url, MAX_REPOMD)?;
+        let raw = client.get_bytes(&url, &[], MAX_REPOMD)?;
         match &cfg.keyring {
             Some(k) => {
                 let sig_url = format!("{url}.asc");
-                let sig = client.get(&sig_url, &[])?.bytes(&sig_url, 1 << 20)?;
+                let sig = client.get_bytes(&sig_url, &[], 1 << 20)?;
                 verify_detached(k, &raw, &sig)?;
             }
             None => warnings.push(format!("{base}: repomd.xml is trusted on TLS alone (no keyring given)")),

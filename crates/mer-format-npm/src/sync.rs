@@ -172,8 +172,8 @@ impl Resolver<'_> {
     fn packument(&mut self, name: &str) -> Result<Option<&Value>, NpmError> {
         if !self.packuments.contains_key(name) {
             let url = format!("{}/{}", self.cfg.registry.trim_end_matches('/'), name.replace('/', "%2f"));
-            let body = match self.client.get(&url, &[("Accept", ABBREVIATED)]) {
-                Ok(r) => r.bytes(&url, MAX_PACKUMENT)?,
+            let body = match self.client.get_bytes(&url, &[("Accept", ABBREVIATED)], MAX_PACKUMENT) {
+                Ok(b) => b,
                 Err(FetchError::NotFound(_)) => return Ok(None),
                 Err(e) => return Err(e.into()),
             };

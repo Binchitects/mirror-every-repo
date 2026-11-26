@@ -252,7 +252,7 @@ pub fn sync(st: &Storage, repo: &str, client: &HttpClient, cfg: &NugetConfig) ->
     }
 
     // 1. The service index says where the feed keeps things.
-    let index = client.get(&cfg.service_index, &[("Accept", "application/json")])?.bytes(&cfg.service_index, MAX_JSON)?;
+    let index = client.get_bytes(&cfg.service_index, &[("Accept", "application/json")], MAX_JSON)?;
     let index: Value = serde_json::from_slice(&index).map_err(|_| feed("service index is not JSON"))?;
     let resource = |prefix: &str| {
         index["resources"].as_array().into_iter().flatten().find_map(|r| {

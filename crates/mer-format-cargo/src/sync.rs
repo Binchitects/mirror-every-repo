@@ -213,9 +213,8 @@ impl Registry<'_> {
         let lower = name.to_ascii_lowercase();
         if !self.files.contains_key(&lower) {
             let url = format!("{}{}", self.index, index_path(&lower));
-            let parsed = match self.client.get(&url, &[]) {
-                Ok(r) => {
-                    let body = r.bytes(&url, MAX_INDEX_FILE)?;
+            let parsed = match self.client.get_bytes(&url, &[], MAX_INDEX_FILE) {
+                Ok(body) => {
                     let text = String::from_utf8(body).map_err(|_| reg(format!("{url}: not UTF-8")))?;
                     let mut lines = Vec::new();
                     for raw in text.lines().filter(|l| !l.trim().is_empty()) {
@@ -411,7 +410,7 @@ pub fn sync(st: &Storage, repo: &str, client: &HttpClient, cfg: &CargoConfig) ->
 
     // 1. Where the registry keeps the crate files.
     let config_url = format!("{index}config.json");
-    let config = client.get(&config_url, &[("Accept", "application/json")])?.bytes(&config_url, MAX_CONFIG)?;
+    let config = client.get_bytes(&config_url, &[("Accept", "application/json")], MAX_CONFIG)?;
     let config: Value = serde_json::from_slice(&config).map_err(|_| reg("config.json is not JSON"))?;
     let dl = config["dl"].as_str().filter(|d| host_of(d).is_some()).ok_or_else(|| reg("config.json has no http(s) download URL (dl)"))?.to_string();
 

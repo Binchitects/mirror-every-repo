@@ -183,8 +183,8 @@ impl Resolver<'_> {
     fn files_of(&mut self, project: &str) -> Result<&Vec<UpFile>, PyError> {
         if !self.pages.contains_key(project) {
             let url = format!("{}/{project}/", self.cfg.index_url.trim_end_matches('/'));
-            let body = match self.client.get(&url, &[("Accept", JSON_ACCEPT)]) {
-                Ok(r) => r.bytes(&url, MAX_INDEX)?,
+            let body = match self.client.get_bytes(&url, &[("Accept", JSON_ACCEPT)], MAX_INDEX) {
+                Ok(b) => b,
                 Err(FetchError::NotFound(_)) => return Err(index_err(format!("project {project} does not exist upstream"))),
                 Err(e) => return Err(e.into()),
             };
@@ -247,7 +247,7 @@ impl Resolver<'_> {
         for f in &chosen.files {
             let Some(expected) = &f.metadata else { continue };
             let url = format!("{}.metadata", f.url);
-            let body = self.client.get(&url, &[])?.bytes(&url, MAX_METADATA)?;
+            let body = self.client.get_bytes(&url, &[], MAX_METADATA)?;
             if let Some(d) = expected {
                 if Digest::of(&body) != *d {
                     return Err(index_err(format!("{url}: content does not match the hash in the index")));

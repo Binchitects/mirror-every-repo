@@ -129,8 +129,8 @@ impl Fetcher<'_> {
         let key = (m.to_string(), v.to_string());
         if !self.looked_up.contains_key(&key) {
             let url = format!("{db}/lookup/{}@{}", escape(m), escape(v));
-            let body = match self.client.get(&url, &[]) {
-                Ok(r) => r.bytes(&url, MAX_SMALL)?,
+            let body = match self.client.get_bytes(&url, &[], MAX_SMALL) {
+                Ok(b) => b,
                 Err(FetchError::NotFound(_)) => {
                     return Err(up(format!("{m} {v}: the checksum database does not know this version (for private modules, pass their go.sum or turn the checksum database off)")));
                 }
@@ -206,8 +206,8 @@ impl Fetcher<'_> {
                 Some(d) => (self.st.read_blob(&d)?, d),
                 None => {
                     let url = self.url(&path);
-                    let body = match self.client.get(&url, &[]) {
-                        Ok(r) => r.bytes(&url, MAX_MOD)?,
+                    let body = match self.client.get_bytes(&url, &[], MAX_MOD) {
+                        Ok(b) => b,
                         Err(FetchError::NotFound(_)) => {
                             self.missing.insert(key);
                             return Ok(None);
@@ -234,7 +234,7 @@ impl Fetcher<'_> {
         let zip_path = mod_path(m, v, "zip");
         if self.reuse(&zip_path)?.is_none() {
             let url = self.url(&zip_path);
-            let body = self.client.get(&url, &[])?.bytes(&url, MAX_ZIP)?;
+            let body = self.client.get_bytes(&url, &[], MAX_ZIP)?;
             let got = zip_hash(&body, &format!("{m}@{v}")).map_err(|e| up(format!("{m} {v}: {e}")))?;
             self.check(m, v, false, &got)?;
             let (d, size) = self.st.ingest_bytes(&body)?;
@@ -246,7 +246,7 @@ impl Fetcher<'_> {
             Some(d) => self.st.read_blob(&d)?,
             None => {
                 let url = self.url(&info_path);
-                let body = self.client.get(&url, &[])?.bytes(&url, MAX_SMALL)?;
+                let body = self.client.get_bytes(&url, &[], MAX_SMALL)?;
                 let doc: Value = serde_json::from_slice(&body).map_err(|_| up(format!("{m} {v}: .info is not JSON")))?;
                 if doc["Version"].as_str() != Some(v) {
                     return Err(up(format!("{m} {v}: .info names another version")));
@@ -282,7 +282,7 @@ impl Fetcher<'_> {
         }
         // No tagged versions: the proxy can still name a pseudo-version.
         let url = self.url(&format!("{}/@latest", escape(m)));
-        let info: Value = serde_json::from_slice(&self.client.get(&url, &[])?.bytes(&url, MAX_SMALL)?).map_err(|_| up(format!("{m}: @latest is not JSON")))?;
+        let info: Value = serde_json::from_slice(&self.client.get_bytes(&url, &[], MAX_SMALL)?).map_err(|_| up(format!("{m}: @latest is not JSON")))?;
         info["Version"].as_str().filter(|v| version::is_canonical(v)).map(str::to_string).ok_or_else(|| up(format!("{m}: no version to mirror")))
     }
 

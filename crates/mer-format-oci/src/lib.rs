@@ -176,7 +176,7 @@ impl Puller<'_> {
         }
         // Ask only for what is needed: pulling this one repository.
         url.push_str(&format!("{sep}scope=repository:{name}:pull"));
-        let body = self.client.get(&url, &[])?.bytes(&url, MAX_TOKEN)?;
+        let body = self.client.get_bytes(&url, &[], MAX_TOKEN)?;
         let doc: Value = serde_json::from_slice(&body).map_err(|_| reg("token service did not answer with JSON"))?;
         let token = doc["token"].as_str().or(doc["access_token"].as_str()).ok_or_else(|| reg("token service gave no token"))?;
         if token.is_empty() || token.bytes().any(|b| b <= 0x20 || b == 0x7f) {
