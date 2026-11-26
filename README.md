@@ -59,7 +59,7 @@ cd mirror-every-repo
 bash deploy/demo-apt.sh
 ```
 
-The script starts a collector, a vault on a network with no route out, and a stock Debian client that can reach only the vault. It mirrors `hello` from Debian, carries it across as removable media, installs it with `apt-get`, sends a second bundle through the one-way link, and checks every step. `deploy/demo-formats.sh` does the same for pip, npm, dotnet, mvn, cargo, go, helm, dnf and docker.
+The script starts a collector, a vault on a network with no route out, and a stock Debian client that can reach only the vault. It mirrors `hello` from Debian, carries it across as removable media, installs it with `apt-get`, sends a second bundle through the one-way link, and checks every step. `deploy/demo-formats.sh` does the same for pip, npm, dotnet, mvn, cargo, go, helm, dnf and docker, and `deploy/demo-install.sh` installs a collector and a vault with the installer and runs everything through the web panel.
 
 ## Install
 
