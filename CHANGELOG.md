@@ -2,12 +2,11 @@
 
 All notable changes to this project are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [1.1.0] - 2026-11-26
 
 ### Formats
 
 - **Cargo** (Rust): crates mirrored from a sparse index (crates.io by default) with their dependencies, optional dependencies followed only when a feature turns them on, or exactly the versions a `Cargo.lock` names. Every `.crate` is checked against the index checksum. Stock `cargo` builds against the vault with source replacement. `mer cargo sync`.
-
 - **Go modules**: modules mirrored from a module proxy (proxy.golang.org by default) with what minimal version selection can choose, or exactly what a `go.sum` lists. Every zip and `go.mod` is checked against its `h1:` hash from sum.golang.org or the `go.sum`. Stock `go` tidies and builds against the vault as `GOPROXY`. `mer go sync`.
 
 ### Vault

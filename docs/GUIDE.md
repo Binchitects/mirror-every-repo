@@ -32,7 +32,7 @@ Both sides run the same binary, `mer`, and keep everything in one data directory
 The container image is the supported way to run it.
 
 ```bash
-docker pull ghcr.io/binchitects/mirror-every-repo:1.0.0
+docker pull ghcr.io/binchitects/mirror-every-repo:1.1.0
 ```
 
 The image's entry point is `mer`. It runs as user id 10001 and expects two volumes: `/data` for the store and database, `/keys` for key files.
@@ -43,7 +43,7 @@ A long-running container per side, with a shell alias, keeps the rest of this gu
 docker run -d --name mer --restart unless-stopped \
   -v mer-data:/data -v mer-keys:/keys -v /mnt/usb:/media \
   -p 8080:8080 -p 9000:9000/udp \
-  --entrypoint sleep ghcr.io/binchitects/mirror-every-repo:1.0.0 infinity
+  --entrypoint sleep ghcr.io/binchitects/mirror-every-repo:1.1.0 infinity
 ```
 
 ```bash
@@ -260,7 +260,7 @@ Run the server on the vault:
 ```bash
 docker run -d --name mer --restart unless-stopped \
   -v mer-data:/data -v mer-keys:/keys -p 8080:8080 -p 8443:8443 \
-  ghcr.io/binchitects/mirror-every-repo:1.0.0 \
+  ghcr.io/binchitects/mirror-every-repo:1.1.0 \
   serve --listen 0.0.0.0:8080 --admin-listen 0.0.0.0:8443 \
         --tls-cert /keys/tls.crt --tls-key /keys/tls.key
 ```

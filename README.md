@@ -64,7 +64,7 @@ The script starts a collector, a vault on a network with no route out, and a sto
 ## Install
 
 ```bash
-docker pull ghcr.io/binchitects/mirror-every-repo:1.0.0
+docker pull ghcr.io/binchitects/mirror-every-repo:1.1.0
 ```
 
 The image contains the `mer` binary and runs as an unprivileged user with its data in `/data`. A Linux x86-64 binary is attached to each [release](https://github.com/Binchitects/mirror-every-repo/releases).
