@@ -97,6 +97,8 @@ fn own_base(req: &Request, tls: bool, repo: &Repo) -> Option<String> {
 }
 
 const NPM_PLACEHOLDER: &str = "mer://base/";
+/// What `mer_format_composer::BASE_PLACEHOLDER` writes into the metadata.
+const COMPOSER_PLACEHOLDER: &str = "mer://base/";
 const MAX_PACKUMENT: u64 = 512 << 20;
 
 /// npm asks for `/<name>` (a JSON document listing versions) and then for
@@ -393,6 +395,57 @@ fn apk(raw: &str) -> Route {
     }
 }
 
+// -------------------------------------------------------------- composer
+
+/// Composer reads `packages.json`, then `p2/<vendor>/<name>.json` for each
+/// package it considers, then the archives those name. The metadata names
+/// the vault's own archives through a placeholder replaced here with the
+/// address the client used. A package that is not mirrored is a wish; its
+/// branches (`~dev`) are not offered.
+fn composer(app: &App, req: &Request, tls: bool, repo: &Repo, raw: &str) -> Route {
+    let not_found = || Route::Done(Reply::json(404, json!({ "error": "not found" })));
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::json(400, json!({ "error": "bad request" }))) };
+    let part = |s: &str| !s.is_empty() && s.len() <= 100 && !s.starts_with(['.', '-', '_']) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-'));
+    let name = match path.as_str() {
+        "packages.json" => None,
+        p => match p.strip_prefix("p2/").and_then(|r| r.strip_suffix(".json")).and_then(|r| r.split_once('/')) {
+            Some((v, n)) if part(v) && part(n) => Some(format!("{v}/{n}")),
+            Some((v, n)) if part(v) && n.strip_suffix("~dev").is_some_and(part) => return not_found(),
+            _ => {
+                let ok = p.strip_prefix("dists/").is_some_and(|r| r.ends_with(".zip") && r.split('/').count() == 3 && r.split('/').all(|s| !s.is_empty() && !s.starts_with('.') && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))));
+                return if ok { Route::Mapped { path, wish: None } } else { not_found() };
+            }
+        },
+    };
+    let stored = match &name {
+        Some(n) => format!("p2/{n}.json"),
+        None => "packages.json".to_string(),
+    };
+    match app.st.lookup_published(&repo.name, &stored, false) {
+        Ok(Lookup::Found(entry)) => {
+            let Some(base) = own_base(req, tls, repo) else {
+                return Route::Done(Reply::json(400, json!({ "error": "a Host header is required" })));
+            };
+            let mut text = String::new();
+            let read = app.st.open_blob(&entry.digest, None).map(|r| r.take(MAX_PACKUMENT).read_to_string(&mut text));
+            if !matches!(read, Ok(Ok(_))) {
+                return Route::Done(Reply::json(500, json!({ "error": "internal error" })));
+            }
+            let body = text.replace(COMPOSER_PLACEHOLDER, &base);
+            Route::Done(Reply::bytes(200, "application/json", body.into_bytes()))
+        }
+        Ok(Lookup::Miss) => {
+            if let Some(n) = &name {
+                app.metrics.misses.fetch_add(1, Ordering::Relaxed);
+                let _ = app.st.lookup_published(&repo.name, n, true);
+            }
+            not_found()
+        }
+        Ok(Lookup::NotPublished) => not_found(),
+        Err(_) => Route::Done(Reply::json(500, json!({ "error": "internal error" }))),
+    }
+}
+
 // ------------------------------------------------------------------- gem
 
 /// `gem install` and Bundler read the compact index (`HEAD`/`GET versions`,
@@ -591,6 +644,7 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "rpm" => rpm(path),
         "apk" => apk(path),
         "gem" => gem(path),
+        "composer" => composer(app, req, tls, repo, path),
         "maven" => maven(path),
         _ => Route::Unhandled,
     }

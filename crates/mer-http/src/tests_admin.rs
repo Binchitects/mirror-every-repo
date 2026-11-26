@@ -842,6 +842,7 @@ fn every_format_turns_a_real_miss_into_what_to_add() {
         ("el9", "rpm", "/el9/Packages/h/htop-3.3.0-1.el9.x86_64.rpm", "--package=htop"),
         ("alp", "apk", "/alp/main/x86_64/jq-1.8.2-r0.apk", "--package=jq"),
         ("rb", "gem", "/rb/info/sinatra", "--gem=sinatra"),
+        ("php", "composer", "/php/p2/symfony/console.json", "--package=symfony/console"),
         ("rb", "gem", "/rb/gems/nokogiri-1.19.7-x86_64-linux-gnu.gem", "--gem=nokogiri@1.19.7"),
         ("m2", "maven", "/m2/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar", "--artifact=org.slf4j:slf4j-api:2.0.16"),
         ("img", "oci", "/v2/img/library/busybox/manifests/1.37", "--image=library/busybox:1.37"),

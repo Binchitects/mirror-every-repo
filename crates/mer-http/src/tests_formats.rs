@@ -496,6 +496,24 @@ fn apk_repositories_are_served_the_way_apk_asks_for_them() {
 }
 
 #[test]
+fn composer_repositories_are_served_the_way_composer_asks_for_them() {
+    let r = rig("php", "composer", &[
+        ("packages.json", br#"{"packages":[],"metadata-url":"mer://base/p2/%package%.json"}"#),
+        ("p2/psr/log.json", br#"{"packages":{"psr/log":[{"version":"3.0.2","dist":{"type":"zip","url":"mer://base/dists/psr/log/3.0.2.0-f16e1d5863e3.zip"}}]}}"#),
+        ("dists/psr/log/3.0.2.0-f16e1d5863e3.zip", b"PK zip"),
+    ]);
+    let index = get(&r, "/php/packages.json").1;
+    assert_eq!(index, format!(r#"{{"packages":[],"metadata-url":"{}/php/p2/%package%.json"}}"#, r.base), "the vault's own address");
+    assert!(get(&r, "/php/p2/psr/log.json").1.contains(&format!("{}/php/dists/psr/log/3.0.2.0-f16e1d5863e3.zip", r.base)));
+    assert_eq!(get(&r, "/php/dists/psr/log/3.0.2.0-f16e1d5863e3.zip").1, "PK zip");
+    for path in ["/php/p2/psr/log~dev.json", "/php/p2/Psr/Log.json", "/php/p2/psr/..%2fx.json", "/php/dists/psr/log/x.tar", "/php/search.json", "/php/p/psr/log.json"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(get(&r, "/php/p2/monolog/monolog.json").0, 404);
+    assert_eq!(wishes(&r), vec![("monolog/monolog".to_string(), 1)], "a missing package is a wish; branches and stray paths are not");
+}
+
+#[test]
 fn gem_sources_are_served_the_way_gem_and_bundle_ask_for_them() {
     let r = rig("gems", "gem", &[
         ("versions", b"created_at: x\n---\nrack 3.2.9 abc\n"),

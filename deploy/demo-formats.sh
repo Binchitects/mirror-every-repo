@@ -21,6 +21,8 @@ RPM="docker compose exec -T rpmclient"
 APK="docker compose exec -T apkclient"
 RB="docker compose exec -T rubyclient"
 RBB="docker compose exec -T rubybuild"
+PHP="docker compose exec -T phpclient"
+PHPB="docker compose exec -T phpbuild"
 MB="docker compose exec -T mavenbuild"
 MVN="docker compose exec -T mavenclient"
 step() { printf '\n=== %s ===\n' "$*"; }
@@ -383,14 +385,47 @@ if $RB gem install --no-document --clear-sources --source http://vault:8080/gems
 else ok "a gem that is not mirrored cannot be installed"; fi
 case "$($V mer wishlist)" in *"gems  rails"*) ok "rails is on the wishlist" ;; *) $V mer wishlist; fail "rails is not on the wishlist" ;; esac
 
-step "25. Containers: mirror 'alpine:3.20' from Docker Hub"
+step "25. Composer: mirror 'monolog/monolog', and exactly what a connected machine's composer.lock names"
+$PHPB sh -c 'mkdir -p /proj && cd /proj && composer require --no-interaction --no-install --no-audit symfony/console:^7 >/dev/null 2>&1' || fail "the connected machine could not lock the project"
+docker compose cp phpbuild:/proj/composer.lock /tmp/mer-demo-composer.lock >/dev/null
+docker compose cp /tmp/mer-demo-composer.lock collector:/tmp/composer.lock >/dev/null
+PHPV=$($PHP php -r 'echo PHP_VERSION;' | tr -d '\r')
+$C mer repo add php --format composer
+$C mer composer sync php --php "$PHPV" -p monolog/monolog --lockfile /tmp/composer.lock | grep -v "^  WARNING" | tail -3
+carry
+
+step "26. Composer: require and install with a stock composer that can only reach the vault"
+$PHP timeout 5 php -r 'exit(@fsockopen("1.1.1.1", 443) ? 0 : 1);' 2>/dev/null && fail "php client can reach the internet" || ok "php client cannot reach the internet"
+$PHP composer config -g repo.packagist composer http://vault:8080/php/
+$PHP composer config -g secure-http false
+$PHP sh -c 'mkdir -p /app1 && cd /app1 && composer require --no-interaction monolog/monolog 2>&1 | grep -i "installing\|error" | tail -2' | sed 's/^/  | /'
+OUT=$($PHP sh -c 'cd /app1 && php -r '"'"'require "vendor/autoload.php"; $l = new Monolog\Logger("demo"); $l->pushHandler(new Monolog\Handler\StreamHandler("php://stdout")); $l->info("hello from the vault");'"'"'' 2>&1 | tr -d '\r')
+case "$OUT" in *"hello from the vault"*) ok "composer require from the vault: monolog logs" ;; *) echo "$OUT"; fail "monolog did not load" ;; esac
+# A lock made upstream names GitHub's archives; composer update against the
+# vault keeps the locked versions and points the lock at the vault.
+$PHP mkdir -p /app2
+docker compose cp phpbuild:/proj/composer.json /tmp/mer-demo-composer.json >/dev/null
+docker compose cp /tmp/mer-demo-composer.json phpclient:/app2/composer.json >/dev/null
+docker compose cp /tmp/mer-demo-composer.lock phpclient:/app2/composer.lock >/dev/null
+rm -f /tmp/mer-demo-composer.lock /tmp/mer-demo-composer.json
+LOCKED=$($PHPB sh -c 'cd /proj && composer show --locked symfony/console 2>/dev/null | sed -n "s/^versions : \* //p"' | tr -d '\r')
+$PHP sh -c 'cd /app2 && composer update --no-interaction 2>&1 | grep -i "installing\|error" | tail -2' | sed 's/^/  | /'
+GOT=$($PHP sh -c 'cd /app2 && composer show symfony/console 2>/dev/null | sed -n "s/^versions : \* //p"' | tr -d '\r')
+OUT=$($PHP sh -c 'cd /app2 && php -r '"'"'require "vendor/autoload.php"; echo (new Symfony\Component\Console\Application("demo", "1.0"))->getLongVersion();'"'"'' 2>&1 | tr -d '\r')
+[ -n "$LOCKED" ] && [ "$GOT" = "$LOCKED" ] && case "$OUT" in *demo*) true ;; *) false ;; esac \
+  && ok "the locked project installs at the locked version (symfony/console $GOT)" || { echo "locked $LOCKED, got $GOT: $OUT"; fail "the locked project did not install as locked"; }
+if $PHP sh -c 'mkdir -p /app3 && cd /app3 && composer require --no-interaction guzzlehttp/guzzle' >/dev/null 2>&1; then fail "guzzle was installable although it is not mirrored"
+else ok "a package that is not mirrored cannot be installed"; fi
+case "$($V mer wishlist)" in *"php  guzzlehttp/guzzle"*) ok "guzzle is on the wishlist" ;; *) $V mer wishlist; fail "guzzle is not on the wishlist" ;; esac
+
+step "27. Containers: mirror 'alpine:3.20' from Docker Hub"
 $C mer repo add hub --format oci
 SYNC=$($C mer oci sync hub -i library/alpine:3.20 | tr -d '\r')
 echo "$SYNC"
 UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
 carry
 
-step "26. Containers: pull and run with a real Docker engine, from the vault only"
+step "28. Containers: pull and run with a real Docker engine, from the vault only"
 # The vault itself has no published ports (its network is internal), so a
 # second server process on the same vault data is exposed on localhost for
 # the Docker engine of this machine. The image is pulled under a name that
@@ -411,7 +446,7 @@ case "$($V mer wishlist)" in *"images/library/busybox:latest"*) ok "the request 
 docker rmi -f "$IMG" >/dev/null 2>&1 || true
 docker rm -f mer-registry >/dev/null 2>&1 || true
 
-step "27. vault: state and integrity"
+step "29. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log || true' | sed 's/^/  requests answered with 200: /'

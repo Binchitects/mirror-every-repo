@@ -105,6 +105,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: HelmCmd,
     },
+    /// Composer repositories for PHP (collector side).
+    Composer {
+        #[command(subcommand)]
+        cmd: ComposerCmd,
+    },
     /// RubyGems sources for gem and bundle (collector side).
     Gem {
         #[command(subcommand)]
@@ -474,6 +479,36 @@ enum HelmCmd {
         charts: Vec<String>,
         /// Additional host the collector may contact (repeatable), for
         /// repositories that keep chart files elsewhere (github.com releases).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ComposerCmd {
+    /// Mirror PHP packages and what they require into a new snapshot of a composer repo.
+    Sync {
+        repo: String,
+        /// The Composer repository.
+        #[arg(long, default_value = "https://repo.packagist.org")]
+        upstream: String,
+        /// Package to mirror (repeatable): monolog/monolog (newest stable),
+        /// "symfony/console:^7.1", psr/log@3.0.2.
+        #[arg(long = "package", short = 'p')]
+        packages: Vec<String>,
+        /// A composer.lock whose exact packages are mirrored (repeatable), so
+        /// that `composer install` of that project works inside the air gap.
+        #[arg(long = "lockfile")]
+        lockfiles: Vec<PathBuf>,
+        /// The PHP inside the air gap, for example 8.3.14: versions that
+        /// need another PHP are left out. Without it, any PHP.
+        #[arg(long)]
+        php: Option<String>,
+        /// Let packages named without a constraint resolve to an unstable version.
+        #[arg(long)]
+        pre: bool,
+        /// Additional host the collector may contact (repeatable), for
+        /// archives kept elsewhere than GitHub.
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
@@ -1570,6 +1605,29 @@ fn main() -> Result<()> {
                     rep.reused,
                     rep.unverified
                 );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Composer { cmd } => match cmd {
+            ComposerCmd::Sync { repo, upstream, packages, lockfiles, php, pre, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                hosts.push(mer_fetch::host_of(&upstream).ok_or_else(|| anyhow!("{upstream:?} is not an http(s) URL"))?);
+                // Packagist points most archives at GitHub, fetched from codeload.
+                hosts.push("codeload.github.com".into());
+                hosts.sort();
+                hosts.dedup();
+                let client = http_client(&hosts);
+                let cfg = mer_format_composer::ComposerConfig { upstream, packages, lockfiles, php, pre };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.upstream, hosts.join(", "));
+                let rep = mer_format_composer::sync(&st, &repo, &client, &cfg)?;
+                println!("{} packages; downloaded {} ({}), {} already in the store", rep.packages, rep.downloaded, human(rep.downloaded_bytes), rep.reused);
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");
                 }

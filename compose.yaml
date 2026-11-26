@@ -125,6 +125,21 @@ services:
     networks: [diode]
     profiles: [formats]
 
+  # A connected machine that locks a PHP project, and a PHP machine inside
+  # the air gap that installs it.
+  phpbuild:
+    image: composer:2
+    entrypoint: ["sleep", "infinity"]
+    networks: [internet]
+    profiles: [formats]
+
+  phpclient:
+    image: composer:2
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+
   mavenbuild:
     image: maven:3.9-eclipse-temurin-21
     entrypoint: ["sleep", "infinity"]

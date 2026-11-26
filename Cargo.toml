@@ -32,6 +32,7 @@ mer-format-rpm = { path = "crates/mer-format-rpm" }
 mer-format-maven = { path = "crates/mer-format-maven" }
 mer-format-apk = { path = "crates/mer-format-apk" }
 mer-format-gem = { path = "crates/mer-format-gem" }
+mer-format-composer = { path = "crates/mer-format-composer" }
 mer-ldap = { path = "crates/mer-ldap" }
 mer-http = { path = "crates/mer-http" }
 mer-auth = { path = "crates/mer-auth" }

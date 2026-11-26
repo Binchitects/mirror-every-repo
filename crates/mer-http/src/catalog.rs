@@ -56,6 +56,18 @@ pub(crate) fn package_of(format: &str, path: &str) -> Option<(String, String)> {
             let at = stem.char_indices().find(|&(i, c)| c == '-' && looks_like_version(&stem[i + 1..])).map(|(i, _)| i)?;
             own(&stem[..at], &stem[at + 1..])
         }
+        "composer" => {
+            // dists/monolog/monolog/3.9.0.0-1f5f55bb4a9a.zip: the version, then
+            // the start of the commit it was made from.
+            let rest = path.strip_prefix("dists/")?.strip_suffix(".zip")?;
+            let (vendor, rest) = rest.split_once('/')?;
+            let (name, file) = rest.split_once('/')?;
+            let version = match file.rsplit_once('-') {
+                Some((v, r)) if r.len() == 12 && r.bytes().all(|b| b.is_ascii_alphanumeric()) => v,
+                _ => file,
+            };
+            own(&format!("{vendor}/{name}"), version)
+        }
         "gem" => {
             // gems/nokogiri-1.19.7-x86_64-linux-gnu.gem, gems/http-2-1.0.0.gem:
             // the version starts at the first "-<digit>" after which a version
@@ -189,6 +201,8 @@ pub(crate) fn wish_hint(format: &str, wish: &str) -> Option<String> {
         "maven" => add("artifact", wish),
         // The file name of a missing package: curl-7.76.1-29.el9_4.x86_64
         "rpm" => package_of("rpm", &format!("{wish}.rpm")).and_then(|(n, _)| add("package", &n)),
+        // A package asked for by name: monolog/monolog
+        "composer" => add("package", wish),
         // A gem asked for by name (info/<gem>) or as a file (<gem>-<version>).
         "gem" => match gem_split(wish) {
             Some((n, v)) => add("gem", &format!("{n}@{}", v.split('-').next().unwrap_or(v))),
@@ -239,6 +253,10 @@ mod tests {
             ("apk", "main/x86_64/lua5.4-5.4.8-r0.apk", Some(("lua5.4", "5.4.8-r0"))),
             ("apk", "main/x86_64/APKINDEX.tar.gz", None),
             ("gem", "gems/rack-3.2.9.gem", Some(("rack", "3.2.9"))),
+            ("composer", "dists/monolog/monolog/3.9.0.0-1f5f55bb4a9a.zip", Some(("monolog/monolog", "3.9.0.0"))),
+            ("composer", "dists/acme/lib/1.0.0.0-beta1-abcdef012345.zip", Some(("acme/lib", "1.0.0.0-beta1"))),
+            ("composer", "p2/monolog/monolog.json", None),
+            ("composer", "packages.json", None),
             ("gem", "gems/nokogiri-1.19.7-x86_64-linux-gnu.gem", Some(("nokogiri", "1.19.7-x86_64-linux-gnu"))),
             ("gem", "gems/http-2-1.0.0.gem", Some(("http-2", "1.0.0"))),
             ("gem", "info/rack", None),
@@ -273,6 +291,7 @@ mod tests {
             ("rpm", "htop-3.3.0-1.el9.x86_64", Some("--package=htop")),
             ("apk", "jq-1.8.2-r0", Some("--package=jq")),
             ("gem", "sinatra", Some("--gem=sinatra")),
+            ("composer", "symfony/console", Some("--package=symfony/console")),
             ("gem", "nokogiri-1.19.7-x86_64-linux-gnu", Some("--gem=nokogiri@1.19.7")),
             ("apk", "py3-pip-25.1-r0", Some("--package=py3-pip")),
             ("apt", "pool/main/h/htop/htop_3.2.2-2_amd64.deb", Some("--package=htop")),

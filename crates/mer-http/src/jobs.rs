@@ -71,6 +71,14 @@ pub fn forms() -> Vec<(&'static str, &'static [&'static str], Vec<Field>)> {
             f("ignore_valid_until", Bool, false, "Accept an expired Release"),
             HOSTS,
         ]),
+        ("composer", &["composer", "sync"], vec![
+            f("upstream", Url, false, "Composer repository (default https://repo.packagist.org)"),
+            f("package", List, false, "Packages to mirror: monolog/monolog, symfony/console:^7.1, psr/log@3.0.2; what they require is added"),
+            f("lockfile", PathList, false, "composer.lock files whose exact packages are mirrored"),
+            f("php", Text, false, "The PHP inside the air gap, for example 8.3.14"),
+            f("pre", Bool, false, "Let packages named without a constraint resolve to an unstable version"),
+            HOSTS,
+        ]),
         ("gem", &["gem", "sync"], vec![
             f("upstream", Url, false, "Gem source (default https://rubygems.org)"),
             f("gem", List, false, "Gems to mirror: rails, rails:~> 8.0, rack@3.2.9; what they depend on is added"),

@@ -464,6 +464,12 @@ function clientSetupDialog(r) {
     if (r.private) add(secure ? "Token, in ~/.netrc (machine is host:port)" : "Token: go sends credentials only over HTTPS, so serve this repository with TLS", [
       `machine ${host} login go password <token>`,
     ]);
+  } else if (r.format === "composer") {
+    add("Use the vault instead of packagist, for every project", [
+      `composer config -g repo.packagist composer ${base}/`,
+    ].concat(secure ? [] : ["composer config -g secure-http false   # the vault is on plain HTTP; serve it with TLS to drop this"]));
+    add("Or in one project's composer.json", ['"repositories": [{ "type": "composer", "url": "' + base + '/" }, { "packagist.org": false }]']);
+    if (r.private) add("Token, in auth.json (any user name)", [`composer config -g http-basic.${host.split(":")[0]} any <token>`]);
   } else if (r.format === "gem") {
     add("Bundler: in the Gemfile", [`source "${base}/"`]);
     add("Or everything through the vault, without changing Gemfiles", [`bundle config set --global mirror.https://rubygems.org ${base}/`]);

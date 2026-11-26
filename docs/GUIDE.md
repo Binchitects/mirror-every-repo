@@ -191,6 +191,19 @@ mer npm sync npm -p express -p "lodash@^4.17" -p "@types/node@20"
 - Dependencies, optional dependencies and non-optional peer dependencies are followed; development dependencies are not.
 - Packages built for another operating system or CPU are left out. `--os`, `--cpu` and `--libc` set the target (defaults `linux`, `x64`, `glibc`).
 
+### Composer (PHP)
+
+```text
+mer repo add php --format composer
+mer composer sync php --php 8.3.14 -p monolog/monolog -p "symfony/console:^7.1" --lockfile composer.lock
+```
+
+- `-p` names a package: `monolog/monolog` (newest stable), `"symfony/console:^7.1"` (a constraint, as in `composer.json`), `psr/log@3.0.2` (exactly). Each constraint, the package's own `require` included, resolves to its newest matching stable version on its own; this is not Composer's solver. `--lockfile` mirrors exactly what a `composer.lock` names, dev packages included.
+- `--php` is the PHP inside the air gap. Versions whose `require.php` rules it out are left out. Requirements on PHP extensions (`ext-*`) and libraries are not packages and are not mirrored.
+- Packagist keeps most archives on GitHub and states no checksum for them, so they are trusted on TLS. The vault's metadata states the SHA-1 of every archive it serves, which Composer checks on download.
+- A project locked on a connected machine: copy its `composer.json` and `composer.lock` across and run `composer update` against the vault, not `composer install`. A lock made upstream names GitHub's archives, which `composer install` would try to reach. `composer update` with only the locked versions on the vault keeps them, and writes the vault's addresses into the lock.
+- Branches (`dev-main`) are mirrored only from a `composer.lock`. Requirements on virtual packages (`psr/log-implementation`) are reported; name a package that provides them.
+
 ### RubyGems
 
 ```text
@@ -400,6 +413,7 @@ Client configuration, with `vault:8080` as the package listener:
 |---|---|
 | apt | `deb [signed-by=/etc/apt/keyrings/site.asc] https://vault:8080/debian bookworm main`. Get the key once from `https://vault:8080/debian/keys/site.asc` or by hand. |
 | dnf, yum | A `.repo` file with `baseurl=https://vault:8080/rocky/`, `gpgcheck=1` and the distribution key. Install with `--disablerepo='*' --enablerepo=vault`, or disable the other repositories. |
+| composer | `composer config -g repo.packagist composer https://vault:8443/php/` (with `composer config -g secure-http false` if the vault is on plain HTTP). |
 | gem | `gem install --clear-sources --source https://vault:8443/gems/ <gem>`, or for good `gem sources --remove https://rubygems.org/ --add https://vault:8443/gems/` |
 | bundle | `source "https://vault:8443/gems/"` in the Gemfile, or without changing Gemfiles `bundle config set --global mirror.https://rubygems.org https://vault:8443/gems/` |
 | apk | `/etc/apk/repositories` with `https://vault:8080/alpine/main` (and `.../community`) and nothing else. The keys the client has already check the index. |
@@ -489,6 +503,7 @@ A token without `--repo` is valid for every repo. Clients send the token as a pa
 | dnf, yum | `username=any` and `password=<token>` in the `.repo` file |
 | apk | In the repository line: `https://any:<token>@vault:8080/alpine/main` |
 | bundle | `bundle config set --global https://vault:8443/gems/ any:<token>` |
+| composer | `composer config -g http-basic.vault any <token>` |
 | gem | The token in the source URL: `--source https://any:<token>@vault:8443/gems/` |
 | pip | `index-url = https://token:<token>@vault:8080/pypi/simple/` |
 | npm | `.npmrc`: `//vault:8080/npm/:_authToken=<token>` |
@@ -559,6 +574,8 @@ Garbage collection only removes content that has been unreferenced for the grace
 | apk: `UNTRUSTED signature` on a client | The client does not have the key that signed the index | Use an Alpine image of the same release, or install `alpine-keys` |
 | `not signed by a trusted key` on the collector | `--keys` does not hold the key that signed the index | Copy `/etc/apk/keys` from an Alpine machine of that release |
 | apk: `ERROR: <package>: HTTP 404` | The package is not mirrored | It is on the wishlist; add it to the sync with `-p` |
+| composer: `Failed to download ... from dist: ... api.github.com` | The lock file was made upstream and names GitHub's archives | Run `composer update` against the vault instead of `composer install`; it keeps the locked versions and points the lock at the vault |
+| composer: `Filter list data could not be fetched ... repo.packagist.org` | Composer looks for packagist's malware filter list | Harmless; Composer ignores the failure |
 | bundle: `Could not find gem 'x' in rubygems repository` | The gem, or a version that fits, is not mirrored | It is on the wishlist; add it with `-g`, or sync the project's `Gemfile.lock` with `--lockfile` |
 | bundle: a gem needs a native build that fails | The precompiled build for that platform is not mirrored | Add the platform with `--platform` (as `bundle platform` names it) |
 | mvn: `Could not resolve dependencies` or `Plugin ... could not be resolved` | The artifact or plugin is not mirrored | It is on the wishlist; build the project once on a connected machine and sync with `--from-m2` |
