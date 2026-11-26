@@ -981,7 +981,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "mer"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "mer-auth"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "argon2",
  "hex",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "mer-blob"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-core",
  "tempfile",
@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "mer-bundle"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-blob",
  "mer-bundle-format",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "mer-bundle-format"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "ciborium",
  "crc32c",
@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "mer-core"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "hex",
  "serde",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "mer-crypto"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "mer-fec"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "raptorq",
  "thiserror 1.0.69",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "mer-fetch"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-core",
  "tempfile",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-apt"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "flate2",
  "mer-blob",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-cargo"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-blob",
  "mer-core",
@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-go"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-helm"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-blob",
  "mer-core",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-maven"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "hex",
  "mer-blob",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-npm"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -1212,7 +1212,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-nuget"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "base64 0.22.1",
  "mer-blob",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-oci"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-blob",
  "mer-core",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-pypi"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-blob",
  "mer-core",
@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "mer-format-rpm"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "flate2",
  "hex",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "mer-http"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -1298,7 +1298,7 @@ dependencies = [
 
 [[package]]
 name = "mer-ldap"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "ldap3",
  "mer-auth",
@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "mer-meta"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-core",
  "rusqlite",
@@ -1317,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "mer-storage"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-blob",
  "mer-core",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "mer-transport-diode"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "mer-bundle",
  "mer-bundle-format",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "mer-transport-media"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "crc32c",
  "mer-bundle",

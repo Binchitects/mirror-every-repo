@@ -2,7 +2,7 @@
 
 All notable changes to this project are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [1.3.0] - 2026-11-26
 
 ### Web panel
 
@@ -11,9 +11,7 @@ All notable changes to this project are recorded here. Versions follow [Semantic
 - **Browse and search** a repository's contents as packages with their versions, or as files.
 - **Review by package**: the review of a snapshot lists packages added, updated and removed before the files.
 - **Wishlist actions**: each item says what to add on the collector, in the words of the Jobs tab's source form and the sync command (`--requirement=django`, `--crate=rand`, `--artifact=g:a:v`, ...). The list downloads as text; operators can dismiss items or clear it.
-
 - **Schedules** in the Jobs tab: sync chosen repositories (or every one with a source) daily at a UTC time on chosen days, or every few hours, then seal a bundle of what changed. Runs that came due while the server was down happen once when it is back; a sync still waiting is not queued twice; "Run now" runs a schedule straight away. Scheduled jobs are audited as `schedule <n>`.
-
 - **LDAP sign-in**: people sign in to the panel with their directory account (OpenLDAP, Active Directory, FreeIPA), and groups decide their role. Local users are checked first and keep working when the directory is down. Settings go in `/etc/mer/ldap.env` with the installer, or are `mer serve --ldap-*` options; `--ldap-ca-file` trusts a company CA for the directory only.
 
 ### Upgrading

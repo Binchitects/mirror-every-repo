@@ -38,8 +38,8 @@ On each machine, as root:
 curl -fsSL https://github.com/Binchitects/mirror-every-repo/releases/latest/download/install.sh | bash -s -- collector
 
 # vault (inside the air gap): carry install.sh and the release archive across first
-tar -xzf mer-v1.2.0-linux-x86_64.tar.gz
-bash install.sh vault --binary mer-v1.2.0-linux-x86_64/mer --trust <collector public key>
+tar -xzf mer-v1.3.0-linux-x86_64.tar.gz
+bash install.sh vault --binary mer-v1.3.0-linux-x86_64/mer --trust <collector public key>
 ```
 
 What it sets up:
