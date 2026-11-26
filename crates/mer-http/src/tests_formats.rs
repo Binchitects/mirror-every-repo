@@ -470,3 +470,15 @@ fn helm_repositories_are_served_the_way_helm_asks_for_them() {
     }
     assert_eq!(wishes(&r), vec![("app-2.0.0".to_string(), 1)]);
 }
+
+#[test]
+fn rpm_repositories_are_served_the_way_dnf_asks_for_them() {
+    let r = rig("el", "rpm", &[("repodata/repomd.xml", b"<repomd/>"), ("Packages/t/tmux-3.2a-5.el9.x86_64.rpm", b"rpm bytes")]);
+    assert_eq!(get(&r, "/el/repodata/repomd.xml").1, "<repomd/>");
+    assert_eq!(get(&r, "/el/Packages/t/tmux-3.2a-5.el9.x86_64.rpm").1, "rpm bytes");
+    assert_eq!(get(&r, "/el/Packages/v/vim-9.0-1.el9.x86_64.rpm").0, 404);
+    for path in ["/el/repodata/repomd.xml.asc", "/el/repodata/x-comps.xml", "/el/media.repo", "/el/Packages/..%2f..%2fmeta.db.rpm"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![("vim-9.0-1.el9.x86_64".to_string(), 1)]);
+}

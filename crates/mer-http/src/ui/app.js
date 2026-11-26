@@ -291,6 +291,12 @@ function clientSetupDialog(r) {
     if (r.private) add(secure ? "Token, in ~/.netrc (machine is host:port)" : "Token: go sends credentials only over HTTPS, so serve this repository with TLS", [
       `machine ${host} login go password <token>`,
     ]);
+  } else if (r.format === "rpm") {
+    add("Add the vault as a repository, in /etc/yum.repos.d/vault.repo", [
+      "[vault]", "name=vault", `baseurl=${base}/`, "gpgcheck=1",
+      "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-<distribution>",
+    ].concat(r.private ? ["username=any", "password=<token>"] : []));
+    add("Install only from the vault", ["dnf --disablerepo='*' --enablerepo=vault install <package>"]);
   } else if (r.format === "helm") {
     add("Add the vault as a chart repository", [`helm repo add vault ${base}/`, "helm search repo vault/"]);
     if (r.private) add("Token", [`helm repo add vault ${base}/ --username any --password <token>`]);

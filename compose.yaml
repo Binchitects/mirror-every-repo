@@ -15,6 +15,12 @@ services:
     image: mer:dev
     entrypoint: ["sleep", "infinity"]
     networks: [internet, diode]
+    # Optional, for collectors that reach the internet through a proxy:
+    # MER_HTTPS_PROXY=http://proxy:3128 bash deploy/demo-formats.sh
+    environment:
+      HTTPS_PROXY: ${MER_HTTPS_PROXY:-}
+      HTTP_PROXY: ${MER_HTTP_PROXY:-}
+      NO_PROXY: ${MER_NO_PROXY:-}
     volumes:
       - collector-data:/data
       - collector-keys:/keys
@@ -85,6 +91,13 @@ services:
       GOPROXY: http://vault:8080/go/
       GOSUMDB: "off"
       GOTOOLCHAIN: local
+
+  rpmclient:
+    image: rockylinux:9
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
 
   helmclient:
     image: alpine/helm:3.16.2

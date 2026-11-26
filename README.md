@@ -6,7 +6,7 @@
 
 **Package repositories for networks that have no internet.**
 
-`mirror-every-repo` keeps apt, PyPI, npm, NuGet, Cargo, Go module, Helm chart and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `pip`, `npm`, `dotnet`, `cargo`, `go`, `helm` and `docker` clients.
+`mirror-every-repo` keeps apt, RPM (yum/dnf), PyPI, npm, NuGet, Cargo, Go module, Helm chart and container image repositories available inside an air-gapped network. A collector on the internet side mirrors what you ask for, with its dependencies. Signed bundles carry only what changed across the gap, on removable media or through a one-way data diode. A vault on the inside checks every byte, holds new content in quarantine until someone approves it, and serves it to stock `apt-get`, `dnf`, `pip`, `npm`, `dotnet`, `cargo`, `go`, `helm` and `docker` clients.
 
 It is one binary, `mer`, written in Rust, shipped as a container image.
 
@@ -39,7 +39,7 @@ General repository managers assume both sides can talk to each other. An air gap
 
 | | |
 |---|---|
-| **Formats** | apt (Debian, Ubuntu), PyPI, npm, NuGet (.NET), Cargo (Rust), Go modules, Helm charts, container images (OCI and Docker), plain files |
+| **Formats** | apt (Debian, Ubuntu), RPM (RHEL, Rocky, AlmaLinux, Fedora), PyPI, npm, NuGet (.NET), Cargo (Rust), Go modules, Helm charts, container images (OCI and Docker), plain files |
 | **Transfer** | Removable media volumes sized to the medium; one-way UDP with RaptorQ error correction for data diodes |
 | **Integrity** | Ed25519-signed bundles with k-of-n signers, a Merkle proof per segment, SHA-256 content addressing, upstream hashes and signatures checked before anything enters a snapshot |
 | **Control** | Quarantine with review of what would change, approve or reject, atomic publish, instant rollback, hash-chained audit log |
@@ -94,6 +94,11 @@ mer apt keygen                                    # site key that clients will t
 mer apt sync debian --upstream http://deb.debian.org/debian --suite bookworm \
     --package nginx --package postgresql-15
 
+mer repo add rocky --format rpm
+mer rpm sync rocky --keyring RPM-GPG-KEY-Rocky-9 -p nginx \
+    --upstream https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/ \
+    --upstream https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/
+
 mer repo add pypi --format pypi
 mer pypi sync pypi --python 3.12 -r requests -r "django>=4.2,<5"
 
@@ -133,6 +138,7 @@ Then open the web panel at `https://vault:8080/ui/`, review what each new snapsh
 # apt: /etc/apt/sources.list.d/vault.list
 deb [signed-by=/etc/apt/keyrings/site.asc] https://vault:8080/debian bookworm main
 
+# dnf: /etc/yum.repos.d/vault.repo with baseurl=https://vault:8080/rocky/ and gpgcheck=1
 pip install --index-url https://vault:8080/pypi/simple/ requests
 npm install --registry https://vault:8080/npm/ express
 dotnet nuget add source https://vault:8080/nuget/v3/index.json --name vault
@@ -155,6 +161,7 @@ What the collector trusts upstream depends on the format:
 | Format | Trusted | Verified |
 |---|---|---|
 | apt | The archive signing key | Signature on the release file; every index and package against the signed hashes |
+| RPM | The distribution key, through `repomd.xml.asc` (or TLS when no key is given) | Every metadata file against `repomd.xml`, every package against its SHA-256; clients check package signatures |
 | PyPI | TLS to the index | Every file against the SHA-256 the index states |
 | npm | TLS to the registry | Every tarball against the registry integrity hash |
 | NuGet | TLS to the feed | Every package against the SHA-512 in the feed catalog |

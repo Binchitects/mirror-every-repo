@@ -103,6 +103,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: HelmCmd,
     },
+    /// RPM repositories for yum and dnf (collector side).
+    Rpm {
+        #[command(subcommand)]
+        cmd: RpmCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -362,6 +367,31 @@ enum HelmCmd {
 }
 
 #[derive(Subcommand)]
+enum RpmCmd {
+    /// Mirror RPM packages and what they require into a new snapshot of an rpm repo.
+    Sync {
+        repo: String,
+        /// Repository base URL, the directory holding repodata/ (repeatable:
+        /// several are merged, as BaseOS and AppStream need each other).
+        #[arg(long = "upstream", required = true)]
+        upstreams: Vec<String>,
+        /// Package to mirror (repeatable). What it requires is added automatically.
+        #[arg(long = "package", short = 'p', required = true)]
+        packages: Vec<String>,
+        /// Architecture to keep (repeatable).
+        #[arg(long = "arch", default_values = ["x86_64", "noarch"])]
+        arches: Vec<String>,
+        /// Distribution key (armored or binary) that repomd.xml.asc must verify
+        /// against, for example RPM-GPG-KEY-Rocky-9.
+        #[arg(long)]
+        keyring: Option<PathBuf>,
+        /// Additional host the collector may contact (repeatable).
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum UserCmd {
     /// Create a user. Without --password-stdin a password is generated and shown once.
     Add {
@@ -438,6 +468,10 @@ enum AptCmd {
         ignore_valid_until: bool,
         #[arg(long, default_value = "mirror-every-repo")]
         origin: String,
+        /// Additional host the upstream may redirect to (repeatable), for
+        /// mirrors that hand downloads to another server.
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
     },
 }
 
@@ -585,6 +619,29 @@ fn read_or_generate_password(from_stdin: bool) -> Result<(String, bool)> {
     let mut raw = [0u8; 15];
     rand::rngs::OsRng.fill_bytes(&mut raw);
     Ok((hex::encode(raw), true))
+}
+
+/// The collector's HTTP client, saying when traffic goes through a proxy.
+fn http_client(hosts: &[String]) -> mer_fetch::HttpClient {
+    let client = mer_fetch::HttpClient::new(hosts);
+    if let Some(p) = hosts.first().and_then(|h| client.proxy_for(&format!("https://{h}/"))) {
+        println!("using proxy {}", redact(p));
+    }
+    client
+}
+
+fn note_proxy(url: &str) {
+    if let Some(p) = mer_fetch::HttpClient::new(&[]).proxy_for(url) {
+        println!("using proxy {}", redact(p));
+    }
+}
+
+/// A proxy URL without its password.
+fn redact(url: &str) -> String {
+    match url.split_once("://").and_then(|(s, r)| r.rsplit_once('@').map(|(_, h)| (s, h))) {
+        Some((scheme, host)) => format!("{scheme}://***@{host}"),
+        None => url.to_string(),
+    }
 }
 
 fn human(bytes: u64) -> String {
@@ -1016,9 +1073,11 @@ fn main() -> Result<()> {
                 gnupghome,
                 ignore_valid_until,
                 origin,
+                allow_hosts,
             } => {
                 let st = open(&data)?;
-                let up = mer_fetch::upstream_from(&upstream)?;
+                let up = mer_fetch::upstream_with_hosts(&upstream, &allow_hosts)?;
+                note_proxy(&upstream);
                 let site = mer_format_apt::SiteKey::open(&gnupghome)?;
                 let cfg = mer_format_apt::AptConfig {
                     suite,
@@ -1070,7 +1129,7 @@ fn main() -> Result<()> {
                     hosts.push("files.pythonhosted.org".into());
                 }
                 hosts.push(index_host);
-                let client = mer_fetch::HttpClient::new(&hosts);
+                let client = http_client(&hosts);
                 let cfg = mer_format_pypi::PyConfig { index_url, requirements, pythons, arch, libcs, sdists, prereleases: pre };
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.index_url, hosts.join(", "));
                 let rep = mer_format_pypi::sync(&st, &repo, &client, &cfg)?;
@@ -1099,7 +1158,7 @@ fn main() -> Result<()> {
                 let st = open(&data)?;
                 let mut hosts = allow_hosts;
                 hosts.push(mer_fetch::host_of(&registry).ok_or_else(|| anyhow!("{registry:?} is not an http(s) URL"))?);
-                let client = mer_fetch::HttpClient::new(&hosts);
+                let client = http_client(&hosts);
                 let cfg = mer_format_npm::NpmConfig { registry, packages, os, cpu, libc };
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.registry, hosts.join(", "));
                 let rep = mer_format_npm::sync(&st, &repo, &client, &cfg)?;
@@ -1138,7 +1197,7 @@ fn main() -> Result<()> {
                 hosts.push(host);
                 hosts.sort();
                 hosts.dedup();
-                let client = mer_fetch::HttpClient::new(&hosts);
+                let client = http_client(&hosts);
                 let cfg = mer_format_oci::OciConfig { registry, images, platforms };
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.registry, hosts.join(", "));
                 let rep = mer_format_oci::sync(&st, &repo, &client, &cfg)?;
@@ -1167,7 +1226,7 @@ fn main() -> Result<()> {
                 let st = open(&data)?;
                 let mut hosts = allow_hosts;
                 hosts.push(mer_fetch::host_of(&feed).ok_or_else(|| anyhow!("{feed:?} is not an http(s) URL"))?);
-                let client = mer_fetch::HttpClient::new(&hosts);
+                let client = http_client(&hosts);
                 let cfg = mer_format_nuget::NugetConfig { service_index: feed, packages, frameworks, prerelease: pre };
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.service_index, hosts.join(", "));
                 let rep = mer_format_nuget::sync(&st, &repo, &client, &cfg)?;
@@ -1201,7 +1260,7 @@ fn main() -> Result<()> {
                 for path in &lockfiles {
                     locks.push(std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?);
                 }
-                let client = mer_fetch::HttpClient::new(&hosts);
+                let client = http_client(&hosts);
                 let cfg = mer_format_cargo::CargoConfig { index, crates, lockfiles: locks, rust_version };
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.index, hosts.join(", "));
                 let rep = mer_format_cargo::sync(&st, &repo, &client, &cfg)?;
@@ -1234,7 +1293,7 @@ fn main() -> Result<()> {
                     paths.iter().map(|p| std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))).collect()
                 };
                 let cfg = mer_format_go::GoConfig { proxy, sumdb, modules, gomods: read(&gomods)?, gosums: read(&gosums)? };
-                let client = mer_fetch::HttpClient::new(&hosts);
+                let client = http_client(&hosts);
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.proxy, hosts.join(", "));
                 let rep = mer_format_go::sync(&st, &repo, &client, &cfg)?;
                 println!(
@@ -1267,7 +1326,7 @@ fn main() -> Result<()> {
                 }
                 hosts.sort();
                 hosts.dedup();
-                let client = mer_fetch::HttpClient::new(&hosts);
+                let client = http_client(&hosts);
                 let cfg = mer_format_helm::HelmConfig { repo: upstream, charts };
                 println!("syncing {repo} from {} (allowed hosts: {})", cfg.repo, hosts.join(", "));
                 let rep = mer_format_helm::sync(&st, &repo, &client, &cfg)?;
@@ -1280,6 +1339,29 @@ fn main() -> Result<()> {
                     rep.reused,
                     rep.unverified
                 );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Rpm { cmd } => match cmd {
+            RpmCmd::Sync { repo, upstreams, packages, arches, keyring, allow_hosts } => {
+                let st = open(&data)?;
+                let mut hosts = allow_hosts;
+                for u in &upstreams {
+                    hosts.push(mer_fetch::host_of(u).ok_or_else(|| anyhow!("{u:?} is not an http(s) URL"))?);
+                }
+                hosts.sort();
+                hosts.dedup();
+                let client = http_client(&hosts);
+                let cfg = mer_format_rpm::RpmConfig { upstreams, packages, arches, keyring };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.upstreams.join(", "), hosts.join(", "));
+                let rep = mer_format_rpm::sync(&st, &repo, &client, &cfg)?;
+                println!("{} packages; downloaded {} ({}), {} already in the store", rep.packages, rep.downloaded, human(rep.downloaded_bytes), rep.reused);
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");
                 }

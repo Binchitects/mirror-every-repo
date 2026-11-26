@@ -351,6 +351,23 @@ fn helm(raw: &str) -> Route {
     }
 }
 
+// ------------------------------------------------------------------- rpm
+
+/// yum and dnf read `repodata/` and then the packages it names. Like apt,
+/// they resolve against the metadata locally, so only a missing package file
+/// (stale metadata) is a wish.
+fn rpm(raw: &str) -> Route {
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::text(400, "bad request\n")) };
+    if path.starts_with("repodata/") {
+        return Route::Mapped { path, wish: None };
+    }
+    if path.ends_with(".rpm") && mer_core::validate_path(&path).is_ok() {
+        let name = path.rsplit('/').next().unwrap_or("").trim_end_matches(".rpm").to_string();
+        return Route::Mapped { path, wish: (!name.is_empty()).then_some(name) };
+    }
+    Route::Done(Reply::text(404, "not found\n"))
+}
+
 // ------------------------------------------------------------ containers
 
 const API_VERSION: (&str, &str) = ("Docker-Distribution-API-Version", "registry/2.0");
@@ -499,6 +516,7 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "cargo" => cargo(app, req, tls, repo, path),
         "go" => golang(app, repo, path),
         "helm" => helm(path),
+        "rpm" => rpm(path),
         _ => Route::Unhandled,
     }
 }

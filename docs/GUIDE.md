@@ -19,7 +19,7 @@ This guide takes you from nothing to a working mirror across an air gap, then co
 |---|---|
 | **collector** | The host on the internet side. Mirrors upstreams and produces bundles. |
 | **vault** | The host inside the air gap. Imports bundles and serves clients. |
-| **repo** | One repository of one format (`apt`, `pypi`, `npm`, `nuget`, `cargo`, `go`, `helm`, `oci`, `raw`). |
+| **repo** | One repository of one format (`apt`, `rpm`, `pypi`, `npm`, `nuget`, `cargo`, `go`, `helm`, `oci`, `raw`). |
 | **snapshot** | An immutable state of a repo, numbered per repo. Clients only ever see one whole snapshot. |
 | **bundle** | A signed file set holding what changed in all repos since the previous bundle. Numbered per channel. |
 | **channel** | One collector-to-vault stream of bundles. The default channel is enough unless one collector feeds several vaults. |
@@ -105,6 +105,22 @@ mer apt sync debian --upstream http://deb.debian.org/debian --suite bookworm \
 - `--component` and `--arch` are repeatable (defaults `main`, `amd64`). `--recommends` also follows recommended packages.
 - The collector generates the indices for the subset and signs them with the site key. Clients trust the site key, not Debian's.
 - Use one repo per suite.
+
+### RPM (yum and dnf)
+
+```text
+mer repo add rocky --format rpm
+mer rpm sync rocky --keyring RPM-GPG-KEY-Rocky-9 \
+    --upstream https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/ \
+    --upstream https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/ \
+    -p tmux -p nginx
+```
+
+- `--upstream` is a repository base URL, the directory that holds `repodata/`. Repeat it to merge several repositories into one vault repo, as Enterprise Linux needs for BaseOS and AppStream.
+- Requirements are followed through package names, sonames and other provides, file paths (from `filelists`), and rich dependencies (`(a or b)`, `(a if b)`). Weak dependencies (Recommends) are not followed; dnf installs without them when they are missing.
+- `--keyring` is the distribution's signing key, armored or binary. `repomd.xml.asc` must verify against it; everything else is checked against `repomd.xml`, so the whole repository traces back to that key. Without `--keyring` the metadata is trusted on TLS alone.
+- `--arch` is repeatable (default `x86_64` and `noarch`).
+- Clients keep `gpgcheck=1` with the distribution key: packages are upstream's own, signatures included.
 
 ### PyPI
 
@@ -204,7 +220,7 @@ The repo becomes a copy of the directory tree.
 
 ### Contacting other hosts
 
-The collector only connects to the upstream host you name, plus the hosts that upstream is known to use: `files.pythonhosted.org` for PyPI, `static.crates.io` for crates.io, `auth.docker.io` and `production.cloudflare.docker.com` for Docker Hub, `cdn01.quay.io` to `cdn03.quay.io` for quay.io, `pkg-containers.githubusercontent.com` for ghcr.io, and GitHub's release asset hosts whenever `github.com` is allowed. This includes redirects: a redirect to any other host is refused, never followed, and the error names the host. If that host is expected (a private registry's storage, a CDN), allow it with `--allow-host`. Redirects from https to http are always refused, and credentials are never sent on to another host.
+The collector only connects to the upstream host you name, plus the hosts that upstream is known to use: `files.pythonhosted.org` for PyPI, `static.crates.io` for crates.io, `auth.docker.io` and `production.cloudflare.docker.com` for Docker Hub, `cdn01.quay.io` to `cdn03.quay.io` for quay.io, `pkg-containers.githubusercontent.com` for ghcr.io, and GitHub's release asset hosts whenever `github.com` is allowed. It honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` when the collector reaches the internet through a proxy; the allowlist still applies to every destination. This includes redirects: a redirect to any other host is refused, never followed, and the error names the host. If that host is expected (a private registry's storage, a CDN), allow it with `--allow-host`. Redirects from https to http are always refused, and credentials are never sent on to another host.
 
 ## Carry bundles across
 
@@ -287,6 +303,7 @@ Client configuration, with `vault:8080` as the package listener:
 | Client | Configuration |
 |---|---|
 | apt | `deb [signed-by=/etc/apt/keyrings/site.asc] https://vault:8080/debian bookworm main`. Get the key once from `https://vault:8080/debian/keys/site.asc` or by hand. |
+| dnf, yum | A `.repo` file with `baseurl=https://vault:8080/rocky/`, `gpgcheck=1` and the distribution key. Install with `--disablerepo='*' --enablerepo=vault`, or disable the other repositories. |
 | pip | `pip install --index-url https://vault:8080/pypi/simple/ <package>`, or `index-url` in `pip.conf`. |
 | npm | `npm config set registry https://vault:8080/npm/`. Use `npm install --no-audit`: the vault has no audit service. |
 | dotnet | `dotnet nuget add source https://vault:8080/nuget/v3/index.json --name vault`, and remove the default source. Restore works; searching for packages does not. |
@@ -338,6 +355,7 @@ A token without `--repo` is valid for every repo. Clients send the token as a pa
 | Client | Where the token goes |
 |---|---|
 | apt | `/etc/apt/auth.conf.d/vault.conf`: `machine https://vault:8080 login apt password <token>` |
+| dnf, yum | `username=any` and `password=<token>` in the `.repo` file |
 | pip | `index-url = https://token:<token>@vault:8080/pypi/simple/` |
 | npm | `.npmrc`: `//vault:8080/npm/:_authToken=<token>` |
 | dotnet | `dotnet nuget add source ... --username any --password <token> --store-password-in-clear-text` |
@@ -390,6 +408,8 @@ Garbage collection only removes content that has been unreferenced for the grace
 | go: `refusing to pass credentials to insecure URL` | Go does not send tokens over plain HTTP | Serve with TLS and put the token in `~/.netrc` |
 | go: an error naming `sum.golang.org` | The client tries to reach the checksum database | `go env -w GOSUMDB=off`; the collector already checked every hash against it |
 | go: an error about a newer Go toolchain | A module asks for a newer Go than the client has, and go tries to download one | `go env -w GOTOOLCHAIN=local`, and use an older version of that module or a newer Go |
+| dnf: `GPG check FAILED` or `public key ... is not installed` | The client does not have the distribution key | Point `gpgkey=` at the distribution's key file, which the distribution's own images ship in `/etc/pki/rpm-gpg/` |
+| `repomd.xml does not verify` on the collector | The keyring is not the key that signed the repository | Use the distribution's key for that release (for example `RPM-GPG-KEY-Rocky-9`) |
 | pip: `is not a trusted or secure host` | pip refuses plain HTTP indexes | Serve with TLS, or pass `--trusted-host` |
 | Sync warns `depends on X, which upstream does not provide` | A dependency could not be satisfied in that upstream | Usually harmless for optional items; otherwise add the upstream or component that has it |
 | The panel says no user exists yet | A fresh vault has no accounts | `mer user add admin --role admin` on the vault host |

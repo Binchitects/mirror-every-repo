@@ -5,7 +5,7 @@
 //! hashes; this crate only bounds what can be asked for and how much is read.
 mod client;
 
-pub use client::{host_of, HttpClient, HttpResponse};
+pub use client::{host_of, HttpClient, HttpResponse, Proxies};
 
 use mer_core::validate_path;
 use std::io::Read;
@@ -80,7 +80,8 @@ impl Upstream for DirUpstream {
     }
 }
 
-/// A remote mirror. Redirects are followed within its own host only.
+/// A remote mirror. Redirects are followed within its own host, and to the
+/// extra hosts it is given.
 pub struct HttpUpstream {
     base: String,
     client: HttpClient,
@@ -91,8 +92,17 @@ impl HttpUpstream {
         if !(base.starts_with("http://") || base.starts_with("https://")) {
             return Err(FetchError::BadUpstream(format!("{base:?} is not an http(s) URL")));
         }
+        Self::with_hosts(base, &[])
+    }
+
+    pub fn with_hosts(base: &str, extra: &[String]) -> Result<Self, FetchError> {
+        if !(base.starts_with("http://") || base.starts_with("https://")) {
+            return Err(FetchError::BadUpstream(format!("{base:?} is not an http(s) URL")));
+        }
         let host = host_of(base).ok_or_else(|| FetchError::BadUpstream(format!("{base:?} is not an http(s) URL")))?;
-        Ok(HttpUpstream { base: base.trim_end_matches('/').to_string(), client: HttpClient::new(&[host]) })
+        let mut hosts = extra.to_vec();
+        hosts.push(host);
+        Ok(HttpUpstream { base: base.trim_end_matches('/').to_string(), client: HttpClient::new(&hosts) })
     }
 }
 
@@ -117,8 +127,13 @@ impl Upstream for HttpUpstream {
 
 /// `http://...` or `https://...` is a remote mirror; anything else is a directory.
 pub fn upstream_from(spec: &str) -> Result<Box<dyn Upstream>, FetchError> {
+    upstream_with_hosts(spec, &[])
+}
+
+/// As [`upstream_from`], allowing redirects to `extra` hosts too.
+pub fn upstream_with_hosts(spec: &str, extra: &[String]) -> Result<Box<dyn Upstream>, FetchError> {
     if spec.starts_with("http://") || spec.starts_with("https://") {
-        Ok(Box::new(HttpUpstream::new(spec)?))
+        Ok(Box::new(HttpUpstream::with_hosts(spec, extra)?))
     } else {
         Ok(Box::new(DirUpstream::new(spec)?))
     }
@@ -290,6 +305,31 @@ mod tests {
         let up = HttpUpstream::new(&hops).unwrap();
         assert_eq!(up.read("to?/plain", 100).ok(), None, "query strings are refused before any request");
         assert!(matches!(up.read("loop", 100), Err(FetchError::BadUpstream(_))));
+    }
+
+    #[test]
+    fn requests_go_through_the_configured_proxy_and_the_allowlist_still_applies() {
+        // A plain HTTP proxy: it receives the absolute URL and answers itself.
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let proxy = format!("http://{}", server.server_addr().to_ip().unwrap());
+        std::thread::spawn(move || {
+            for req in server.incoming_requests() {
+                let body = format!("proxied {}", req.url());
+                let _ = req.respond(tiny_http::Response::from_string(body));
+            }
+        });
+        let hosts = ["upstream.example".to_string(), "direct.example".to_string()];
+        let p = Proxies { http: Some(proxy.clone()), https: None, no_proxy: vec![".direct.example".into(), "direct.example".into()] };
+        let client = HttpClient::with_proxies(&hosts, &p).unwrap();
+        let got = client.get("http://upstream.example/x/y", &[]).unwrap().bytes("x", 100).unwrap();
+        assert_eq!(String::from_utf8(got).unwrap(), "proxied http://upstream.example/x/y");
+        assert_eq!(client.proxy_for("http://upstream.example/a"), Some(proxy.as_str()));
+        assert_eq!(client.proxy_for("http://direct.example/a"), None, "NO_PROXY");
+        assert_eq!(client.proxy_for("http://a.direct.example:8080/a"), None, "NO_PROXY suffix");
+        assert_eq!(client.proxy_for("https://upstream.example/a"), None, "no https proxy set");
+        // The destination host must still be allowed, proxy or not.
+        assert!(matches!(client.get("http://elsewhere.example/x", &[]), Err(FetchError::BadUpstream(_))));
+        assert!(HttpClient::with_proxies(&hosts, &Proxies { https: Some("::not a url".into()), ..Default::default() }).is_err());
     }
 
     #[test]

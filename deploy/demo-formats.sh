@@ -17,6 +17,7 @@ NET="docker compose exec -T dotnetclient"
 RS="docker compose exec -T rustclient"
 GO="docker compose exec -T goclient"
 HELM="docker compose exec -T helmclient"
+RPM="docker compose exec -T rpmclient"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK: %s\n' "$*"; }
 fail() { printf '  FAILED: %s\n' "$*"; exit 1; }
@@ -219,14 +220,42 @@ COUNT=$($HELM sh -c 'helm template cm vault/cert-manager --namespace cert-manage
 if $HELM helm pull vault/trust-manager >/dev/null 2>&1; then fail "trust-manager was pullable although it is not mirrored"
 else ok "a chart that is not mirrored cannot be pulled"; fi
 
-step "17. Containers: mirror 'alpine:3.20' from Docker Hub"
+step "17. RPM: mirror 'tmux' and 'jq' from Rocky Linux 9 BaseOS and AppStream, metadata checked against the Rocky key"
+$C mer repo add rocky --format rpm
+# The collector checks repomd.xml against the same key the clients trust.
+docker compose cp rpmclient:/etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9 /tmp/mer-rocky-key.asc >/dev/null
+docker compose cp /tmp/mer-rocky-key.asc collector:/tmp/rocky.asc >/dev/null
+rm -f /tmp/mer-rocky-key.asc
+$C mer rpm sync rocky --keyring /tmp/rocky.asc \
+  --upstream https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/ \
+  --upstream https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/ \
+  -p tmux -p jq | grep -v "^  WARNING" | tail -3
+carry
+
+step "18. RPM: install with a stock dnf that can only reach the vault, package signatures checked"
+$RPM timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "rpm client can reach the internet" || ok "rpm client cannot reach the internet"
+$RPM sh -c 'cat > /etc/yum.repos.d/vault.repo' <<'INI'
+[vault]
+name=vault
+baseurl=http://vault:8080/rocky/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+INI
+$RPM sh -c 'command -v tmux jq' >/dev/null 2>&1 && fail "tmux or jq is already installed" || ok "tmux and jq are not installed yet"
+$RPM dnf -y -q --disablerepo='*' --enablerepo=vault install tmux jq 2>&1 | tail -3 | sed 's/^/  | /'
+OUT=$($RPM sh -c 'tmux -V; echo "{\"text\":\"hello from the vault\"}" | jq -r .text' 2>&1 | tr -d '\r')
+case "$OUT" in *"hello from the vault"*) ok "installed from the vault with signatures checked: $(echo "$OUT" | tr '\n' ' ')" ;; *) echo "$OUT"; fail "tmux or jq did not run" ;; esac
+if $RPM dnf -y -q --disablerepo='*' --enablerepo=vault install vim-enhanced >/dev/null 2>&1; then fail "vim was installable although it is not mirrored"
+else ok "a package that is not mirrored cannot be installed"; fi
+
+step "19. Containers: mirror 'alpine:3.20' from Docker Hub"
 $C mer repo add hub --format oci
 SYNC=$($C mer oci sync hub -i library/alpine:3.20 | tr -d '\r')
 echo "$SYNC"
 UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
 carry
 
-step "18. Containers: pull and run with a real Docker engine, from the vault only"
+step "20. Containers: pull and run with a real Docker engine, from the vault only"
 # The vault itself has no published ports (its network is internal), so a
 # second server process on the same vault data is exposed on localhost for
 # the Docker engine of this machine. The image is pulled under a name that
@@ -247,7 +276,7 @@ case "$($V mer wishlist)" in *"images/library/busybox:latest"*) ok "the request 
 docker rmi -f "$IMG" >/dev/null 2>&1 || true
 docker rm -f mer-registry >/dev/null 2>&1 || true
 
-step "19. vault: state and integrity"
+step "21. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log' | sed 's/^/  requests answered with 200: /'

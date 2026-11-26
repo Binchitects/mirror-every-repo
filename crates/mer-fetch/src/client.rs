@@ -32,8 +32,51 @@ pub(crate) fn resolve(base: &str, location: &str) -> Option<String> {
 }
 
 pub struct HttpClient {
-    agent: ureq::Agent,
+    direct: ureq::Agent,
+    /// Agents through the configured proxies, for https and http URLs.
+    via_https: Option<(String, ureq::Agent)>,
+    via_http: Option<(String, ureq::Agent)>,
+    no_proxy: Vec<String>,
     allowed: Vec<String>,
+}
+
+/// Proxy settings, as `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` give them.
+#[derive(Clone, Debug, Default)]
+pub struct Proxies {
+    pub https: Option<String>,
+    pub http: Option<String>,
+    /// Host names (and `.domain` suffixes) reached directly; `*` for all.
+    pub no_proxy: Vec<String>,
+}
+
+impl Proxies {
+    /// From the environment, upper- or lower-case names; empty values are unset.
+    pub fn from_env() -> Proxies {
+        let var = |names: [&str; 2]| names.iter().find_map(|n| std::env::var(n).ok()).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        Proxies {
+            https: var(["HTTPS_PROXY", "https_proxy"]),
+            http: var(["HTTP_PROXY", "http_proxy"]),
+            no_proxy: var(["NO_PROXY", "no_proxy"]).map(|v| v.split(',').map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()).collect()).unwrap_or_default(),
+        }
+    }
+}
+
+fn agent(proxy: Option<&str>) -> Result<ureq::Agent, FetchError> {
+    let mut b = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(30))
+        .timeout_read(Duration::from_secs(120))
+        .user_agent("mer-collector")
+        // Redirects are followed here, one by one, against the allowlist.
+        .redirects(0);
+    if let Some(p) = proxy {
+        let authority = p.strip_prefix("http://").or_else(|| p.strip_prefix("https://")).map(|r| r.trim_end_matches('/')).unwrap_or("");
+        let hostport = authority.rsplit('@').next().unwrap_or("");
+        if hostport.is_empty() || hostport.contains('/') || hostport.bytes().any(|c| c <= 0x20) {
+            return Err(FetchError::BadUpstream(format!("proxy {p:?} is not an http://host:port URL")));
+        }
+        b = b.proxy(ureq::Proxy::new(p).map_err(|e| FetchError::BadUpstream(format!("proxy {p:?}: {e}")))?);
+    }
+    Ok(b.build())
 }
 
 pub struct HttpResponse {
@@ -77,15 +120,44 @@ pub fn host_of(url: &str) -> Option<String> {
 
 impl HttpClient {
     /// `allowed` are `host` or `host:port` values the collector may contact.
+    /// Proxies come from the environment (`HTTPS_PROXY`, `HTTP_PROXY`,
+    /// `NO_PROXY`); a proxy setting that cannot be used is ignored with a
+    /// message, so a typo never silently sends traffic another way.
     pub fn new(allowed: &[String]) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(30))
-            .timeout_read(Duration::from_secs(120))
-            .user_agent("mer-collector")
-            // Redirects are followed here, one by one, against the allowlist.
-            .redirects(0)
-            .build();
-        HttpClient { agent, allowed: allowed.iter().map(|h| h.to_ascii_lowercase()).collect() }
+        match Self::with_proxies(allowed, &Proxies::from_env()) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("WARNING: {e}; connecting directly");
+                Self::with_proxies(allowed, &Proxies::default()).expect("no proxy")
+            }
+        }
+    }
+
+    /// Like [`HttpClient::new`], with explicit proxy settings.
+    pub fn with_proxies(allowed: &[String], p: &Proxies) -> Result<Self, FetchError> {
+        Ok(HttpClient {
+            direct: agent(None)?,
+            via_https: p.https.as_ref().map(|u| agent(Some(u)).map(|a| (u.clone(), a))).transpose()?,
+            via_http: p.http.as_ref().map(|u| agent(Some(u)).map(|a| (u.clone(), a))).transpose()?,
+            no_proxy: p.no_proxy.clone(),
+            allowed: allowed.iter().map(|h| h.to_ascii_lowercase()).collect(),
+        })
+    }
+
+    /// The proxy a request to `url` goes through, if any.
+    pub fn proxy_for(&self, url: &str) -> Option<&str> {
+        self.route(url).0
+    }
+
+    fn route(&self, url: &str) -> (Option<&str>, &ureq::Agent) {
+        let host = host_of(url).unwrap_or_default();
+        let name = host.rsplit_once(':').filter(|(_, p)| p.bytes().all(|b| b.is_ascii_digit())).map_or(host.as_str(), |(h, _)| h);
+        let bypass = self.no_proxy.iter().any(|n| n == "*" || n == name || n.strip_prefix('.').is_some_and(|d| name.ends_with(&format!(".{d}"))) || name.ends_with(&format!(".{n}")));
+        let via = if bypass { None } else if url.starts_with("https://") { self.via_https.as_ref() } else { self.via_http.as_ref() };
+        match via {
+            Some((u, a)) => (Some(u.as_str()), a),
+            None => (None, &self.direct),
+        }
     }
 
     pub fn allows(&self, url: &str) -> bool {
@@ -111,7 +183,7 @@ impl HttpClient {
                 return Err(FetchError::BadPath(current));
             }
             let same_host = host_of(&current) == first_host;
-            let mut req = self.agent.get(&current);
+            let mut req = self.route(&current).1.get(&current);
             for (k, v) in headers {
                 if same_host || !k.eq_ignore_ascii_case("authorization") {
                     req = req.set(k, v);

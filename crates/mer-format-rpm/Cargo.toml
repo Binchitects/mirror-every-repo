@@ -1,0 +1,25 @@
+[package]
+name = "mer-format-rpm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mer-core.workspace = true
+mer-blob.workspace = true
+mer-meta.workspace = true
+mer-storage.workspace = true
+mer-fetch.workspace = true
+sha2.workspace = true
+hex.workspace = true
+flate2.workspace = true
+quick-xml.workspace = true
+ruzstd.workspace = true
+lzma-rs.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tiny_http.workspace = true
