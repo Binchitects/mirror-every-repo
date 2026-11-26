@@ -194,6 +194,144 @@ fn nuget(app: &App, req: &Request, tls: bool, repo: &Repo, raw: &str) -> Route {
     }
 }
 
+// ----------------------------------------------------------------- cargo
+
+fn crate_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    !b.is_empty() && b.len() <= 64 && b[0].is_ascii_alphanumeric() && b.iter().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+}
+
+/// The index path Cargo asks for, if `path` is one: `1/a`, `2/ab`,
+/// `3/a/abc`, `ab/cd/abcd`. Returns the crate name.
+fn cargo_index_name(path: &str) -> Option<&str> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let name = *parts.last()?;
+    if !crate_name(name) || name.bytes().any(|b| b.is_ascii_uppercase()) {
+        return None;
+    }
+    let ok = match (name.len(), parts.as_slice()) {
+        (1, ["1", _]) | (2, ["2", _]) => true,
+        (3, ["3", a, _]) => *a == &name[..1],
+        (n, [a, b, _]) if n >= 4 => *a == &name[..2] && *b == &name[2..4],
+        _ => false,
+    };
+    ok.then_some(name)
+}
+
+/// Cargo starts at `config.json`, which says where crate files are. That
+/// address must be absolute, so the stored file carries a placeholder that is
+/// replaced with the address the client used. For a private repository it
+/// also tells Cargo to send its token with every request.
+fn cargo(app: &App, req: &Request, tls: bool, repo: &Repo, raw: &str) -> Route {
+    let not_found = || Route::Done(Reply::json(404, json!({ "errors": [{ "detail": "not found" }] })));
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::json(400, json!({ "error": "bad request" }))) };
+    if path == "config.json" {
+        let Some(base) = own_base(req, tls, repo) else {
+            return Route::Done(Reply::json(400, json!({ "error": "a Host header is required" })));
+        };
+        return match small_blob(app, repo, "config.json") {
+            Ok(Some(body)) => {
+                let text = String::from_utf8_lossy(&body).replace(NPM_PLACEHOLDER, &base);
+                let mut doc: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({}));
+                if repo.private {
+                    doc["auth-required"] = json!(true);
+                }
+                Route::Done(Reply::bytes(200, "application/json", doc.to_string().into_bytes()))
+            }
+            Ok(None) => not_found(),
+            Err(()) => Route::Done(Reply::json(500, json!({ "error": "internal error" }))),
+        };
+    }
+    if let Some(rest) = path.strip_prefix("crates/") {
+        // crates/<name>/<name>-<version>.crate
+        return match rest.split_once('/') {
+            Some((name, file)) if crate_name(name) && file.strip_prefix(name).and_then(|f| f.strip_prefix('-')).is_some_and(|v| v.ends_with(".crate") && !v.contains('/')) => {
+                let version = &file[name.len() + 1..file.len() - ".crate".len()];
+                Route::Mapped { path: path.clone(), wish: Some(format!("{name}@={version}")) }
+            }
+            _ => not_found(),
+        };
+    }
+    match cargo_index_name(&path) {
+        // Asking for a crate that is not mirrored is a wish.
+        Some(name) => Route::Mapped { wish: Some(name.to_string()), path },
+        None => not_found(),
+    }
+}
+
+// -------------------------------------------------------------------- go
+
+/// The module proxy protocol (`GOPROXY`) is plain files, which is how the
+/// snapshot stores them. Only requests for modules count as wishes, named by
+/// the module path as `go` spells it. The checksum database is not offered.
+fn golang(app: &App, repo: &Repo, raw: &str) -> Route {
+    let not_found = || Route::Done(Reply::text(404, "not found\n"));
+    let Some(path) = percent_decode(raw) else { return Route::Done(Reply::text(400, "bad request\n")) };
+    let module = |escaped: &str| go_unescape(escaped).filter(|m| go_module_path(m));
+    // To find which module holds a package, go asks for every prefix of
+    // its path. Prefixes that cannot be modules are not wishes.
+    // A path inside a module that is mirrored is such a probe too.
+    let inside_mirrored = |m: &str| {
+        let parts: Vec<&str> = m.split('/').collect();
+        (2..parts.len()).any(|n| matches!(app.st.lookup_published(&repo.name, &format!("{}/@v/list", go_escape(&parts[..n].join("/"))), false), Ok(Lookup::Found(_))))
+    };
+    let wish = |m: String, what: String| (go_could_be_module(&m) && !inside_mirrored(&m)).then_some(what);
+    if let Some(escaped) = path.strip_suffix("/@latest") {
+        return match module(escaped) {
+            Some(m) => Route::Mapped { path: path.clone(), wish: wish(m.clone(), m) },
+            None => not_found(),
+        };
+    }
+    let Some((escaped, file)) = path.rsplit_once("/@v/") else { return not_found() };
+    let Some(m) = module(escaped) else { return not_found() };
+    if file == "list" {
+        return Route::Mapped { path: path.clone(), wish: wish(m.clone(), m) };
+    }
+    let version = file.strip_suffix(".zip").or_else(|| file.strip_suffix(".mod")).or_else(|| file.strip_suffix(".info"));
+    match version.and_then(go_unescape) {
+        Some(v) if v.starts_with('v') && !v.contains('/') => Route::Mapped { path: path.clone(), wish: wish(m.clone(), format!("{m}@{v}")) },
+        _ => not_found(),
+    }
+}
+
+/// The proxy's case escaping: `Azure` -> `!azure`.
+fn go_escape(s: &str) -> String {
+    s.chars().flat_map(|c| if c.is_ascii_uppercase() { vec!['!', c.to_ascii_lowercase()] } else { vec![c] }).collect()
+}
+
+/// The proxy's case escaping undone: `!azure` -> `Azure`.
+fn go_unescape(s: &str) -> Option<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut bang = false;
+    for c in s.chars() {
+        match (bang, c) {
+            (true, c) if c.is_ascii_lowercase() => {
+                out.push(c.to_ascii_uppercase());
+                bang = false;
+            }
+            (true, _) => return None,
+            (false, '!') => bang = true,
+            (false, c) if c.is_ascii_uppercase() => return None,
+            (false, c) => out.push(c),
+        }
+    }
+    (!bang).then_some(out)
+}
+
+/// A bare host is never a module, and on the big code hosts (and for
+/// golang.org/x) a module is at least `host/owner/repo`.
+fn go_could_be_module(path: &str) -> bool {
+    let depth = path.split('/').count();
+    let three = ["github.com", "gitlab.com", "bitbucket.org", "golang.org"];
+    depth >= 2 && !(depth < 3 && three.contains(&path.split('/').next().unwrap_or("")))
+}
+
+fn go_module_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 512
+        && path.split('/').all(|e| !e.is_empty() && !e.starts_with('.') && !e.ends_with('.') && e.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')))
+}
+
 // ------------------------------------------------------------ containers
 
 const API_VERSION: (&str, &str) = ("Docker-Distribution-API-Version", "registry/2.0");
@@ -339,6 +477,8 @@ pub(crate) fn route(app: &App, req: &Request, tls: bool, repo: &Repo, path: &str
         "npm" => npm(app, req, tls, repo, path),
         "oci" => oci(app, repo, path),
         "nuget" => nuget(app, req, tls, repo, path),
+        "cargo" => cargo(app, req, tls, repo, path),
+        "go" => golang(app, repo, path),
         _ => Route::Unhandled,
     }
 }

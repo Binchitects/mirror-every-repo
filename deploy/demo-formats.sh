@@ -14,6 +14,8 @@ V="docker compose exec -T vault"
 PY="docker compose exec -T pyclient"
 NODE="docker compose exec -T nodeclient"
 NET="docker compose exec -T dotnetclient"
+RS="docker compose exec -T rustclient"
+GO="docker compose exec -T goclient"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK: %s\n' "$*"; }
 fail() { printf '  FAILED: %s\n' "$*"; exit 1; }
@@ -129,14 +131,86 @@ if $NET sh -c 'cd /tmp/app && dotnet add package Dapper --version 2.1.35' >/dev/
 else ok "a package that is not mirrored cannot be restored"; fi
 case "$($V mer wishlist)" in *"nuget  dapper"*) ok "the request for Dapper is on the wishlist" ;; *) $V mer wishlist; fail "Dapper is not on the wishlist" ;; esac
 
-step "11. Containers: mirror 'alpine:3.20' from Docker Hub"
+step "11. Cargo: mirror 'serde' (with derive), 'serde_json' and 'anyhow' from crates.io"
+$C mer repo add cargo --format cargo
+$C mer cargo sync cargo -c 'serde@1:derive' -c serde_json -c anyhow
+carry
+
+step "12. Cargo: build and run with a stock cargo that can only reach the vault"
+$RS timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "rust client can reach the internet" || ok "rust client cannot reach the internet"
+$RS sh -c 'rm -rf /tmp/app && cargo new --quiet /tmp/app && mkdir -p /tmp/app/.cargo'
+# Source replacement: everything that would come from crates.io comes from the vault.
+$RS sh -c 'cat > /tmp/app/.cargo/config.toml' <<'TOML'
+[source.crates-io]
+replace-with = "vault"
+
+[source.vault]
+registry = "sparse+http://vault:8080/cargo/"
+TOML
+$RS sh -c 'cat >> /tmp/app/Cargo.toml' <<'TOML'
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+TOML
+$RS sh -c 'cat > /tmp/app/src/main.rs' <<'RS'
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Greeting { text: String }
+
+fn main() -> anyhow::Result<()> {
+    let g: Greeting = serde_json::from_str(r#"{"text":"hello from the vault"}"#)?;
+    println!("{}", serde_json::to_string(&Greeting { text: g.text })?);
+    Ok(())
+}
+RS
+$RS sh -c 'cd /tmp/app && cargo build --quiet' 2>&1 | tail -3 | sed 's/^/  | /'
+OUT=$($RS sh -c 'cd /tmp/app && ./target/debug/app' 2>&1 | tr -d '\r')
+case "$OUT" in *"hello from the vault"*) ok "fetched from the vault, built and ran: $OUT" ;; *) echo "$OUT"; fail "the program did not run" ;; esac
+$RS sh -c 'cd /tmp/app && grep -c "^name = " Cargo.lock' | tr -d '\r' | sed 's/^/  packages in Cargo.lock: /'
+if $RS sh -c 'cd /tmp/app && cargo add --quiet rand@0.8 && cargo build --quiet' >/dev/null 2>&1; then fail "rand was buildable although it is not mirrored"
+else ok "a crate that is not mirrored cannot be used"; fi
+case "$($V mer wishlist)" in *"cargo  rand"*) ok "the request for rand is on the wishlist" ;; *) $V mer wishlist; fail "rand is not on the wishlist" ;; esac
+
+step "13. Go: mirror 'cobra' and 'BurntSushi/toml' from proxy.golang.org, checked against sum.golang.org"
+$C mer repo add go --format go
+$C mer go sync go -m github.com/spf13/cobra@v1.8.1 -m github.com/BurntSushi/toml@v1.4.0
+carry
+
+step "14. Go: tidy, build and run with a stock go that can only reach the vault"
+$GO timeout 5 bash -c '</dev/tcp/1.1.1.1/443' 2>/dev/null && fail "go client can reach the internet" || ok "go client cannot reach the internet"
+$GO sh -c 'rm -rf /tmp/app && mkdir /tmp/app && cd /tmp/app && go mod init example.com/app >/dev/null 2>&1'
+$GO sh -c 'cat > /tmp/app/main.go' <<'GOSRC'
+package main
+
+import (
+	"fmt"
+
+	"github.com/BurntSushi/toml"
+	"github.com/spf13/cobra"
+)
+
+func main() {
+	var doc struct{ Text string }
+	toml.Decode(`text = "hello from the vault"`, &doc)
+	cmd := &cobra.Command{Use: "app", Run: func(*cobra.Command, []string) { fmt.Println(doc.Text) }}
+	cmd.Execute()
+}
+GOSRC
+$GO sh -c 'cd /tmp/app && go get github.com/spf13/cobra@v1.8.1 github.com/BurntSushi/toml@v1.4.0 && go mod tidy' 2>&1 | tail -3 | sed 's/^/  | /'
+OUT=$($GO sh -c 'cd /tmp/app && go build -o app . && ./app' 2>&1 | tr -d '\r')
+case "$OUT" in *"hello from the vault"*) ok "fetched from the vault, built and ran: $OUT" ;; *) echo "$OUT"; fail "the program did not run" ;; esac
+$GO sh -c 'cd /tmp/app && grep -c . go.sum' | tr -d '\r' | sed 's/^/  lines in go.sum: /'
+if $GO sh -c 'cd /tmp/app && go get github.com/google/uuid@v1.6.0' >/dev/null 2>&1; then fail "uuid was fetchable although it is not mirrored"
+else ok "a module that is not mirrored cannot be fetched"; fi
+case "$($V mer wishlist)" in *"go  github.com/google/uuid"*) ok "the request for google/uuid is on the wishlist" ;; *) $V mer wishlist; fail "google/uuid is not on the wishlist" ;; esac
+
+step "15. Containers: mirror 'alpine:3.20' from Docker Hub"
 $C mer repo add hub --format oci
 SYNC=$($C mer oci sync hub -i library/alpine:3.20 | tr -d '\r')
 echo "$SYNC"
 UPSTREAM_DIGEST=$(echo "$SYNC" | awk '/->/ {print $NF}')
 carry
 
-step "12. Containers: pull and run with a real Docker engine, from the vault only"
+step "16. Containers: pull and run with a real Docker engine, from the vault only"
 # The vault itself has no published ports (its network is internal), so a
 # second server process on the same vault data is exposed on localhost for
 # the Docker engine of this machine. The image is pulled under a name that
@@ -157,7 +231,7 @@ case "$($V mer wishlist)" in *"images/library/busybox:latest"*) ok "the request 
 docker rmi -f "$IMG" >/dev/null 2>&1 || true
 docker rm -f mer-registry >/dev/null 2>&1 || true
 
-step "13. vault: state and integrity"
+step "17. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
 $V sh -c 'grep -c " 200 " /tmp/http.log' | sed 's/^/  requests answered with 200: /'

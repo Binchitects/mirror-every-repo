@@ -371,3 +371,90 @@ fn nuget_requests_for_unmirrored_packages_become_wishes() {
     }
     assert_eq!(wishes(&r), vec![("dapper".to_string(), 2), ("a/2.0.0".to_string(), 1)]);
 }
+
+#[test]
+fn cargo_registry_is_found_the_way_cargo_asks_for_it() {
+    let config = br#"{"dl":"mer://base/crates/{crate}/{crate}-{version}.crate"}"#;
+    let r = rig(
+        "rs",
+        "cargo",
+        &[
+            ("config.json", config),
+            ("se/rd/serde", b"{\"name\":\"serde\",\"vers\":\"1.0.0\"}\n"),
+            ("1/a", b"{}\n"),
+            ("3/l/log", b"{}\n"),
+            ("crates/serde/serde-1.0.0.crate", b"crate bytes"),
+        ],
+    );
+    let host = r.base.trim_start_matches("http://").to_string();
+    let (status, body, _, ct) = get(&r, "/rs/config.json");
+    assert_eq!((status, ct.as_deref()), (200, Some("application/json")));
+    let doc: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(doc["dl"], format!("http://{host}/rs/crates/{{crate}}/{{crate}}-{{version}}.crate"));
+    assert!(doc.get("auth-required").is_none());
+    assert_eq!(get(&r, "/rs/se/rd/serde").0, 200);
+    assert_eq!(get(&r, "/rs/1/a").0, 200);
+    assert_eq!(get(&r, "/rs/3/l/log").0, 200);
+    assert_eq!(get(&r, "/rs/crates/serde/serde-1.0.0.crate").1, "crate bytes");
+}
+
+#[test]
+fn cargo_requests_for_unmirrored_crates_become_wishes() {
+    let r = rig("rs", "cargo", &[("config.json", b"{}"), ("1/a", b"{}\n")]);
+    assert_eq!(get(&r, "/rs/to/ki/tokio").0, 404);
+    assert_eq!(get(&r, "/rs/crates/a/a-2.0.0.crate").0, 404);
+    for path in ["/rs/xx/yy/tokio", "/rs/3/x/log", "/rs/to/ki/Tokio", "/rs/to/ki/..%2f..%2fmeta.db", "/rs/api/v1/crates", "/rs/crates/a/b-1.0.0.crate", "/rs/1/a%2f..%2f..%2fconfig.json"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    assert_eq!(wishes(&r), vec![("a@=2.0.0".to_string(), 1), ("tokio".to_string(), 1)]);
+}
+
+#[test]
+fn a_private_cargo_registry_asks_cargo_for_its_token() {
+    let r = rig("rs", "cargo", &[("config.json", br#"{"dl":"mer://base/crates/{crate}/{crate}-{version}.crate"}"#)]);
+    let id = r.st.repo("rs").unwrap().id;
+    r.st.meta().write(|t| t.repo_set_private(id, true)).unwrap();
+    // Cargo first asks without a token; a 401 makes it retry with one.
+    assert_eq!(get(&r, "/rs/config.json").0, 401);
+    let secret = App::new(r.st.clone()).auth.create_token("ci", Some("rs"), "t").unwrap();
+    let resp = ureq::get(&format!("{}/rs/config.json", r.base)).set("Authorization", &secret).call().unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&resp.into_string().unwrap()).unwrap();
+    assert_eq!(doc["auth-required"], true);
+}
+
+#[test]
+fn go_modules_are_served_the_way_goproxy_clients_ask_for_them() {
+    let r = rig(
+        "go",
+        "go",
+        &[
+            ("github.com/!burnt!sushi/toml/@v/list", b"v1.4.0\n"),
+            ("github.com/!burnt!sushi/toml/@v/v1.4.0.info", br#"{"Version":"v1.4.0"}"#),
+            ("github.com/!burnt!sushi/toml/@v/v1.4.0.mod", b"module github.com/BurntSushi/toml\n"),
+            ("github.com/!burnt!sushi/toml/@v/v1.4.0.zip", b"zip bytes"),
+            ("github.com/!burnt!sushi/toml/@latest", br#"{"Version":"v1.4.0"}"#),
+            ("example.com/legacy/@v/list", b"v2.1.0+incompatible\n"),
+            ("example.com/legacy/@v/v2.1.0+incompatible.zip", b"legacy zip"),
+        ],
+    );
+    assert_eq!(get(&r, "/go/github.com/!burnt!sushi/toml/@v/list").1, "v1.4.0\n");
+    assert_eq!(get(&r, "/go/github.com/!burnt!sushi/toml/@v/v1.4.0.zip").1, "zip bytes");
+    assert_eq!(get(&r, "/go/github.com/!burnt!sushi/toml/@v/v1.4.0.mod").0, 200);
+    assert_eq!(get(&r, "/go/github.com/!burnt!sushi/toml/@latest").0, 200);
+    // Unmirrored modules and versions are wishes, named as go spells them.
+    assert_eq!(get(&r, "/go/github.com/!burnt!sushi/toml/@v/v1.5.0.zip").0, 404);
+    assert_eq!(get(&r, "/go/golang.org/x/text/@v/list").0, 404);
+    assert_eq!(get(&r, "/go/github.com/!google/uuid/@latest").0, 404);
+    assert_eq!(get(&r, "/go/example.com/legacy/@v/v2.1.0+incompatible.zip").1, "legacy zip");
+    // go probing the prefixes of a package path, or the package path inside a mirrored module: not wishes.
+    for probe in ["/go/github.com/!burnt!sushi/toml/internal/@v/v1.4.0.info", "/go/example.com/legacy/sub/pkg/@v/list", "/go/github.com/@v/v1.6.0.info", "/go/github.com/google/@v/v1.6.0.info", "/go/golang.org/x/@v/list", "/go/example/@v/list"] {
+        assert_eq!(get(&r, probe).0, 404, "{probe}");
+    }
+    // The checksum database and malformed paths are not offered and not wished for.
+    for path in ["/go/sumdb/sum.golang.org/supported", "/go/github.com/BurntSushi/toml/@v/list", "/go/x.com/a/@v/v1.0.0.exe", "/go/x.com/%2e%2e/@v/list", "/go/x.com/a!/@v/list", "/go/x.com/a/@v/..%2f..%2fmeta.db"] {
+        assert_eq!(get(&r, path).0, 404, "{path}");
+    }
+    let mut w = wishes(&r);
+    w.sort();
+    assert_eq!(w, vec![("github.com/BurntSushi/toml@v1.5.0".to_string(), 1), ("github.com/Google/uuid".to_string(), 1), ("golang.org/x/text".to_string(), 1)]);
+}

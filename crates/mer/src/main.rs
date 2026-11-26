@@ -88,6 +88,16 @@ enum Cmd {
         #[command(subcommand)]
         cmd: NugetCmd,
     },
+    /// Cargo registries for Rust (collector side).
+    Cargo {
+        #[command(subcommand)]
+        cmd: CargoCmd,
+    },
+    /// Go modules (collector side).
+    Go {
+        #[command(subcommand)]
+        cmd: GoCmd,
+    },
     /// Serve published snapshots to package clients, and the web panel.
     Serve {
         /// Listener for package clients (and the panel, unless --admin-listen is given).
@@ -263,6 +273,65 @@ enum NugetCmd {
         pre: bool,
         /// Additional host the collector may contact (repeatable), if the
         /// feed keeps packages or metadata on another host.
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum CargoCmd {
+    /// Mirror Rust crates and their dependencies into a new snapshot of a cargo repo.
+    Sync {
+        repo: String,
+        /// Sparse index of the upstream registry.
+        #[arg(long, default_value = "https://index.crates.io/")]
+        index: String,
+        /// What to mirror (repeatable): serde (newest), "serde@1.0",
+        /// "tokio@1:full,macros" (with features), "rand@=0.8.5" (exact).
+        #[arg(long = "crate", short = 'c')]
+        crates: Vec<String>,
+        /// Mirror the registry packages of this Cargo.lock at exactly the
+        /// versions it names (repeatable).
+        #[arg(long = "lockfile")]
+        lockfiles: Vec<PathBuf>,
+        /// Rust toolchain inside the air gap (1.80): versions declaring a
+        /// newer rust-version are passed over when an older one fits.
+        #[arg(long = "rust-version")]
+        rust_version: Option<String>,
+        /// Additional host the collector may contact (repeatable). For the
+        /// crates.io index, static.crates.io is allowed already.
+        #[arg(long = "allow-host")]
+        allow_hosts: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum GoCmd {
+    /// Mirror Go modules and what they require into a new snapshot of a go repo.
+    Sync {
+        repo: String,
+        /// Upstream module proxy.
+        #[arg(long, default_value = "https://proxy.golang.org")]
+        proxy: String,
+        /// Checksum database every download is checked against.
+        #[arg(long, default_value = "https://sum.golang.org")]
+        sumdb: String,
+        /// Do not consult the checksum database (private modules); downloads
+        /// are then checked only against the hashes of the given go.sum files.
+        #[arg(long)]
+        no_sumdb: bool,
+        /// Module to mirror (repeatable): rsc.io/quote@v1.5.2, or a path
+        /// alone for its newest release.
+        #[arg(long = "module", short = 'm')]
+        modules: Vec<String>,
+        /// A project's go.mod: its requirements are mirrored with what they need (repeatable).
+        #[arg(long = "gomod")]
+        gomods: Vec<PathBuf>,
+        /// A project's go.sum: exactly what it lists is mirrored and checked
+        /// against its hashes (repeatable).
+        #[arg(long = "gosum")]
+        gosums: Vec<PathBuf>,
+        /// Additional host the collector may contact (repeatable).
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
     },
@@ -1076,6 +1145,74 @@ fn main() -> Result<()> {
                     rep.downloaded,
                     human(rep.downloaded_bytes),
                     rep.reused
+                );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Cargo { cmd } => match cmd {
+            CargoCmd::Sync { repo, index, crates, lockfiles, rust_version, allow_hosts } => {
+                let st = open(&data)?;
+                let url = index.strip_prefix("sparse+").unwrap_or(&index);
+                let mut hosts = allow_hosts;
+                hosts.push(mer_fetch::host_of(url).ok_or_else(|| anyhow!("{index:?} is not an http(s) URL"))?);
+                if hosts.iter().any(|h| h == "index.crates.io") {
+                    hosts.push("static.crates.io".into());
+                }
+                let mut locks = Vec::new();
+                for path in &lockfiles {
+                    locks.push(std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?);
+                }
+                let client = mer_fetch::HttpClient::new(&hosts);
+                let cfg = mer_format_cargo::CargoConfig { index, crates, lockfiles: locks, rust_version };
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.index, hosts.join(", "));
+                let rep = mer_format_cargo::sync(&st, &repo, &client, &cfg)?;
+                println!(
+                    "{} crates, {} versions; downloaded {} ({}), {} already in the store",
+                    rep.crates,
+                    rep.versions,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused
+                );
+                for w in &rep.warnings {
+                    println!("  WARNING: {w}");
+                }
+                match rep.snapshot {
+                    Some(seq) => println!("repo {repo}: snapshot {seq} sealed"),
+                    None => println!("repo {repo}: no change"),
+                }
+            }
+        },
+        Cmd::Go { cmd } => match cmd {
+            GoCmd::Sync { repo, proxy, sumdb, no_sumdb, modules, gomods, gosums, allow_hosts } => {
+                let st = open(&data)?;
+                let sumdb = (!no_sumdb).then_some(sumdb);
+                let mut hosts = allow_hosts;
+                for url in std::iter::once(&proxy).chain(sumdb.iter()) {
+                    hosts.push(mer_fetch::host_of(url).ok_or_else(|| anyhow!("{url:?} is not an http(s) URL"))?);
+                }
+                let read = |paths: &[PathBuf]| -> Result<Vec<String>> {
+                    paths.iter().map(|p| std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))).collect()
+                };
+                let cfg = mer_format_go::GoConfig { proxy, sumdb, modules, gomods: read(&gomods)?, gosums: read(&gosums)? };
+                let client = mer_fetch::HttpClient::new(&hosts);
+                println!("syncing {repo} from {} (allowed hosts: {})", cfg.proxy, hosts.join(", "));
+                let rep = mer_format_go::sync(&st, &repo, &client, &cfg)?;
+                println!(
+                    "{} modules, {} zips, {} go.mod files; downloaded {} ({}), {} already in the store, {} without a checksum",
+                    rep.modules,
+                    rep.zips,
+                    rep.gomods,
+                    rep.downloaded,
+                    human(rep.downloaded_bytes),
+                    rep.reused,
+                    rep.unverified
                 );
                 for w in &rep.warnings {
                     println!("  WARNING: {w}");

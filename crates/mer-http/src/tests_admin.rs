@@ -300,7 +300,8 @@ fn private_repositories_need_a_valid_token() {
     // What apt sends: Basic auth, any user name, the token as password.
     use base64::Engine;
     let basic = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("apt:{secret}")));
-    for auth in [&bearer, &basic] {
+    // What Cargo sends: the token on its own.
+    for auth in [&bearer, &basic, &secret] {
         let ok = pkg.send("GET", "/tools/a.txt", None, &[("Authorization", auth)]);
         assert_eq!((ok.status, ok.text.as_str()), (200, "one"));
     }

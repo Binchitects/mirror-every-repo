@@ -701,6 +701,8 @@ dependencies = [
  "mer-crypto",
  "mer-fetch",
  "mer-format-apt",
+ "mer-format-cargo",
+ "mer-format-go",
  "mer-format-npm",
  "mer-format-nuget",
  "mer-format-oci",
@@ -817,6 +819,41 @@ dependencies = [
  "mer-storage",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "mer-format-cargo"
+version = "1.0.0"
+dependencies = [
+ "mer-blob",
+ "mer-core",
+ "mer-fetch",
+ "mer-meta",
+ "mer-storage",
+ "semver",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tiny_http",
+]
+
+[[package]]
+name = "mer-format-go"
+version = "1.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "mer-blob",
+ "mer-core",
+ "mer-fetch",
+ "mer-meta",
+ "mer-storage",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tiny_http",
 ]
 
 [[package]]

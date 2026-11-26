@@ -19,7 +19,7 @@ This guide takes you from nothing to a working mirror across an air gap, then co
 |---|---|
 | **collector** | The host on the internet side. Mirrors upstreams and produces bundles. |
 | **vault** | The host inside the air gap. Imports bundles and serves clients. |
-| **repo** | One repository of one format (`apt`, `pypi`, `npm`, `nuget`, `oci`, `raw`). |
+| **repo** | One repository of one format (`apt`, `pypi`, `npm`, `nuget`, `cargo`, `go`, `oci`, `raw`). |
 | **snapshot** | An immutable state of a repo, numbered per repo. Clients only ever see one whole snapshot. |
 | **bundle** | A signed file set holding what changed in all repos since the previous bundle. Numbered per channel. |
 | **channel** | One collector-to-vault stream of bundles. The default channel is enough unless one collector feeds several vaults. |
@@ -139,6 +139,36 @@ mer nuget sync nuget --framework net8.0 -p Serilog.Sinks.Console -p Newtonsoft.J
 - A package without a version means the newest listed stable one. `Id@1.2.3` means that version or the next higher one that exists, which is how NuGet reads a version. `Id@[1.2.3]` means exactly that version.
 - Packages a build pulls in implicitly (runtime packs for self-contained publish, analyzers) have to be named.
 
+### Cargo (Rust)
+
+```text
+mer repo add cargo --format cargo
+mer cargo sync cargo -c 'serde@1:derive' -c 'tokio@1:full' -c anyhow
+mer cargo sync cargo --lockfile path/to/Cargo.lock
+```
+
+- A crate without a version means the newest one. `name@1.2` is a Cargo requirement (`^1.2`); `name@=1.2.3` is exactly that version. Features go after a colon: `tokio@1:full,macros`. Default features are always on.
+- Each requirement resolves to the newest matching version that is not yanked, as Cargo does. Optional dependencies are mirrored only when an enabled feature turns them on. Build dependencies are followed; development dependencies are not.
+- Dependencies for every target platform are mirrored (Windows and macOS ones too), because Cargo resolves for all platforms even when it builds for one, exactly like `cargo vendor`.
+- `--lockfile` mirrors the registry packages of a `Cargo.lock` at exactly the versions it names, and checks them against the checksums the lockfile states. Repeat it for several projects. This is the most reliable way to make an existing project build inside the air gap.
+- `--rust-version 1.80` passes over versions that declare a newer `rust-version` than the toolchain your machines have, when an older version fits.
+- `--index` selects another sparse registry (default crates.io). Crates from crates.io are downloaded from `static.crates.io`, which is allowed automatically.
+
+### Go modules
+
+```text
+mer repo add go --format go
+mer go sync go -m github.com/spf13/cobra@v1.8.1 -m golang.org/x/text
+mer go sync go --gosum path/to/go.sum
+mer go sync go --gomod path/to/go.mod
+```
+
+- A module without a version means its newest release that is not retracted, as `go get module@latest` picks it.
+- Requirements in `go.mod` files are followed through the whole module graph. The `go.mod` of every version in the graph is mirrored (they are small, and `go` reads many of them). Zips are mirrored for the versions a build can select: the newest in the full graph, the newest in the pruned graph that Go 1.17 and later use, and every version a root names.
+- `--gosum` mirrors exactly what a project's `go.sum` lists and checks every download against its hashes. This is the most reliable way to make an existing project build inside the air gap. `--gomod` takes a project's `go.mod` and mirrors its requirements with what they need; `replace` directives in it are not followed.
+- Every `.zip` and `.mod` is checked against the hash in the Go checksum database (`--sumdb`, default `sum.golang.org`) unless a given `go.sum` has it. For private modules that the checksum database cannot know, pass their `go.sum` and `--no-sumdb`.
+- `--proxy` selects another module proxy (default `proxy.golang.org`).
+
 ### Container images
 
 ```text
@@ -247,10 +277,12 @@ Client configuration, with `vault:8080` as the package listener:
 | pip | `pip install --index-url https://vault:8080/pypi/simple/ <package>`, or `index-url` in `pip.conf`. |
 | npm | `npm config set registry https://vault:8080/npm/`. Use `npm install --no-audit`: the vault has no audit service. |
 | dotnet | `dotnet nuget add source https://vault:8080/nuget/v3/index.json --name vault`, and remove the default source. Restore works; searching for packages does not. |
+| cargo | In `.cargo/config.toml`: `[source.crates-io]` `replace-with = "vault"` and `[source.vault]` `registry = "sparse+https://vault:8080/cargo/"`. Build works; `cargo search` and `cargo publish` do not. |
+| go | `go env -w GOPROXY=https://vault:8080/go/ GOSUMDB=off GOTOOLCHAIN=local`. Downloads, `go mod tidy` and `go build` work; `go` still checks everything against the project's `go.sum`. |
 | docker | `docker pull vault:8080/hub/library/alpine:3.20`. The image name is `<vault>/<repo>/<upstream name>`. |
 | files | `curl -O https://vault:8080/tools/<path>` |
 
-On plain HTTP, clients need to be told to accept it: `--trusted-host vault` for pip, `--allow-insecure-connections` for the dotnet source, `insecure-registries` in Docker's `daemon.json`. apt and npm accept `http://` URLs as they are.
+On plain HTTP, clients need to be told to accept it: `--trusted-host vault` for pip, `--allow-insecure-connections` for the dotnet source, `insecure-registries` in Docker's `daemon.json`. apt, npm, cargo and go accept `http://` URLs as they are (go then cannot send a token; see below).
 
 The panel's "Client setup" button shows these lines for each repo with your address filled in.
 
@@ -295,9 +327,11 @@ A token without `--repo` is valid for every repo. Clients send the token as a pa
 | pip | `index-url = https://token:<token>@vault:8080/pypi/simple/` |
 | npm | `.npmrc`: `//vault:8080/npm/:_authToken=<token>` |
 | dotnet | `dotnet nuget add source ... --username any --password <token> --store-password-in-clear-text` |
+| cargo | In `.cargo/config.toml`, define the vault as `[registries.vault]` `index = "sparse+https://vault:8080/cargo/"` (instead of `[source.vault]`), keep `replace-with = "vault"`, and add `[registry]` `global-credential-providers = ["cargo:token"]`. Put the token in `~/.cargo/credentials.toml` as `[registries.vault]` `token = "<token>"`, or in `CARGO_REGISTRIES_VAULT_TOKEN`. `cargo login` does not work, because the vault has no registry API. |
+| go | `~/.netrc`: `machine vault:8080 login go password <token>` (the machine name includes the port). Go sends credentials only over HTTPS, so a private Go repo needs the vault on TLS. |
 | docker | `docker login vault:8080` with any user name and the token as password |
 
-The apt flow is tested end to end with a real client. The others rely on the same Basic and Bearer handling, which is covered by the server's tests.
+The apt, Cargo and Go flows are tested end to end with real clients. The others rely on the same Basic and Bearer handling, which is covered by the server's tests. Cargo sends the token on its own, without `Bearer`, which the vault also accepts.
 
 ## Day-to-day operation
 
@@ -338,6 +372,9 @@ Garbage collection only removes content that has been unreferenced for the grace
 | `401` from a client | The repo is private and the token is missing, wrong or revoked | See [Private repositories](#private-repositories) |
 | docker: `server gave HTTP response to HTTPS client` | Docker expects TLS | Serve with TLS, or list the vault under `insecure-registries` |
 | dotnet: `NU1302` | NuGet refuses plain HTTP sources | Serve with TLS, or add `allowInsecureConnections="true"` to the source |
+| go: `refusing to pass credentials to insecure URL` | Go does not send tokens over plain HTTP | Serve with TLS and put the token in `~/.netrc` |
+| go: an error naming `sum.golang.org` | The client tries to reach the checksum database | `go env -w GOSUMDB=off`; the collector already checked every hash against it |
+| go: an error about a newer Go toolchain | A module asks for a newer Go than the client has, and go tries to download one | `go env -w GOTOOLCHAIN=local`, and use an older version of that module or a newer Go |
 | pip: `is not a trusted or secure host` | pip refuses plain HTTP indexes | Serve with TLS, or pass `--trusted-host` |
 | Sync warns `depends on X, which upstream does not provide` | A dependency could not be satisfied in that upstream | Usually harmless for optional items; otherwise add the upstream or component that has it |
 | The panel says no user exists yet | A fresh vault has no accounts | `mer user add admin --role admin` on the vault host |

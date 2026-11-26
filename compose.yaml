@@ -65,6 +65,27 @@ services:
     networks: [diode]
     profiles: [formats]
 
+  rustclient:
+    image: rust:1.99-bookworm
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+
+  goclient:
+    image: golang:1.23-bookworm
+    depends_on: [vault]
+    entrypoint: ["sleep", "infinity"]
+    networks: [diode]
+    profiles: [formats]
+    # The vault is the only module source; there is no checksum database
+    # inside the air gap (the collector checked every hash against it), and
+    # go must not try to download a newer toolchain.
+    environment:
+      GOPROXY: http://vault:8080/go/
+      GOSUMDB: "off"
+      GOTOOLCHAIN: local
+
 networks:
   internet: {}
   diode:

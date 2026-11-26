@@ -52,11 +52,14 @@ fn parse_range(value: &str, size: u64) -> Result<Option<(u64, u64)>, ()> {
     Ok(Some((start, end - start + 1)))
 }
 
-/// The secret a client presented: `Authorization: Bearer <token>`, or Basic
-/// auth with the token as the password (what apt and pip can send).
+/// The secret a client presented: `Authorization: Bearer <token>`, Basic
+/// auth with the token as the password (what apt and pip can send), or the
+/// token on its own (what Cargo sends).
 pub(crate) fn presented_token(req: &Request) -> Option<String> {
-    let value = header(req, "Authorization")?;
-    let (scheme, rest) = value.trim().split_once(' ')?;
+    let value = header(req, "Authorization")?.trim();
+    let Some((scheme, rest)) = value.split_once(' ') else {
+        return (!value.is_empty()).then(|| value.to_string());
+    };
     if scheme.eq_ignore_ascii_case("bearer") {
         return Some(rest.trim().to_string());
     }

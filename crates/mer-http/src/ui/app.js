@@ -272,6 +272,25 @@ function clientSetupDialog(r) {
       "  </packageSources>", "</configuration>",
     ]);
     if (r.private) add("Token", [`dotnet nuget add source ${base}/v3/index.json --name vault --username any --password <token> --store-password-in-clear-text${insecure}`]);
+  } else if (r.format === "cargo") {
+    add("Use the vault instead of crates.io, in .cargo/config.toml", [
+      "[source.crates-io]", 'replace-with = "vault"', "", "[source.vault]", `registry = "sparse+${base}/"`,
+    ]);
+    if (r.private) add("Token: in .cargo/config.toml, use these in place of the [source.vault] table", [
+      "[registries.vault]", `index = "sparse+${base}/"`, "",
+      "[registry]", 'global-credential-providers = ["cargo:token"]', "",
+      "# and the token, in ~/.cargo/credentials.toml (or CARGO_REGISTRIES_VAULT_TOKEN):",
+      "[registries.vault]", 'token = "<token>"',
+    ]);
+  } else if (r.format === "go") {
+    add("Use the vault as the only module source", [
+      `go env -w GOPROXY=${base}/`,
+      "go env -w GOSUMDB=off        # no checksum database inside the air gap; go.sum is still checked",
+      "go env -w GOTOOLCHAIN=local  # do not try to download newer Go toolchains",
+    ]);
+    if (r.private) add(secure ? "Token, in ~/.netrc (machine is host:port)" : "Token: go sends credentials only over HTTPS, so serve this repository with TLS", [
+      `machine ${host} login go password <token>`,
+    ]);
   } else if (r.format === "oci") {
     add("Pull an image", [`docker pull ${host}/${r.name}/<image>:<tag>`, `# for example: docker pull ${host}/${r.name}/library/alpine:3.20`]);
     if (!secure) add("Plain HTTP needs to be allowed on the client (or serve with TLS)", ['# /etc/docker/daemon.json', `{ "insecure-registries": ["${host}"] }`]);
