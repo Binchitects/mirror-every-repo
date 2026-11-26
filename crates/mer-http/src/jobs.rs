@@ -321,6 +321,9 @@ pub fn sync_args(cfg: &JobsConfig, format: &str, repo: &str, spec: &Value) -> Re
     Ok(args)
 }
 
+/// How many finished jobs are kept, with their logs.
+pub const KEEP_JOBS: u32 = 500;
+
 /// The queue's runner: one job at a time, as a child process.
 pub struct Jobs {
     pub cfg: JobsConfig,
@@ -380,7 +383,8 @@ impl Jobs {
             *self.current.lock().unwrap_or_else(|e| e.into_inner()) = Some((job.id, false));
             let (state, code, log) = self.execute(&st, job.id, &job.args);
             *self.current.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            if let Err(e) = st.meta().write(|t| t.job_finish(job.id, state, code, &log, now_ms())) {
+            // The newest jobs are kept, with their logs; schedules make many.
+            if let Err(e) = st.meta().write(|t| t.job_finish(job.id, state, code, &log, now_ms()).and_then(|_| t.jobs_prune(KEEP_JOBS).map(|_| ()))) {
                 eprintln!("ERROR: jobs: job {}: {e}", job.id);
             }
         }

@@ -234,6 +234,21 @@ impl Tx<'_> {
             .is_some())
     }
 
+    /// Whether the job queued last is of this kind: a seal right behind
+    /// another seal adds nothing.
+    pub fn job_last_queued_is(&self, kind: &str) -> Result<bool> {
+        let last: Option<String> = self.c.query_row("SELECT kind FROM job WHERE state = 'queued' ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).optional()?;
+        Ok(last.as_deref() == Some(kind))
+    }
+
+    /// Forget finished jobs beyond the newest `keep`. Returns how many went.
+    pub fn jobs_prune(&self, keep: u32) -> Result<usize> {
+        Ok(self.c.execute(
+            "DELETE FROM job WHERE state NOT IN ('queued', 'running') AND id <= (SELECT id FROM job ORDER BY id DESC LIMIT 1 OFFSET ?1)",
+            params![keep],
+        )?)
+    }
+
     /// Repositories that have a source, by name.
     pub fn sources_list(&self) -> Result<Vec<SourceRow>> {
         let mut stmt = self.c.prepare("SELECT r.name, s.spec, s.updated_at, s.updated_by FROM sync_source s JOIN repo r ON r.id = s.repo_id ORDER BY r.name")?;

@@ -436,4 +436,19 @@ fn schedules_come_due_and_remember_their_runs() {
     assert!(m.read(|t| t.job_active("sync", "pypi")).unwrap());
     m.write(|t| t.job_finish(j, "succeeded", Some(0), "", 6)).unwrap();
     assert!(!m.read(|t| t.job_active("sync", "pypi")).unwrap());
+
+    assert!(!m.read(|t| t.job_last_queued_is("seal")).unwrap());
+    m.write(|t| t.job_create("seal", "bundle", "[]", "schedule 1", 7)).unwrap();
+    assert!(m.read(|t| t.job_last_queued_is("seal")).unwrap());
+    m.write(|t| t.job_create("sync", "npm", "[]", "olga", 8)).unwrap();
+    assert!(!m.read(|t| t.job_last_queued_is("seal")).unwrap(), "a sync after the seal needs a seal after it");
+
+    // Keep the newest 2 jobs; queued ones are never forgotten.
+    for i in 0..4 {
+        let id = m.write(|t| t.job_create("sync", "x", "[]", "olga", 10 + i)).unwrap();
+        m.write(|t| t.job_finish(id, "succeeded", Some(0), "", 20)).unwrap();
+    }
+    assert_eq!(m.write(|t| t.jobs_prune(2)).unwrap(), 3, "finished jobs 1, 4 and 5 are beyond the newest two (6 and 7)");
+    let left: Vec<String> = m.read(|t| t.job_list(100)).unwrap().iter().map(|j| j.state.clone()).collect();
+    assert_eq!(left.iter().filter(|s| *s == "queued").count(), 2, "queued jobs stay: {left:?}");
 }

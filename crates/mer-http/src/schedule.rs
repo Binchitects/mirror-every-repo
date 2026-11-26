@@ -156,8 +156,10 @@ pub fn run(app: &App, id: i64, repos: &[String], seal: bool) -> Result<(Vec<i64>
             None => skipped.push("no seal: this server has no bundle key".into()),
             Some(key) => {
                 let args = vec!["export".to_string(), "seal".to_string(), format!("--key={}", key.display())];
-                // After the syncs in the queue, so the bundle carries what they bring.
-                match submit(app, &actor, "seal", "bundle", &args, false) {
+                // After the syncs in the queue, so the bundle carries what they
+                // bring; not when a seal is already the last job waiting.
+                let behind_seal = st.meta().read(|t| t.job_last_queued_is("seal")).unwrap_or(false);
+                match if behind_seal { Ok(None) } else { submit(app, &actor, "seal", "bundle", &args, false) } {
                     Ok(Some(job)) => jobs.push(job),
                     Ok(None) => {}
                     Err(e) => skipped.push(format!("seal: {e}")),

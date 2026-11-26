@@ -93,7 +93,14 @@ J=$(CAPI post repos/pypi/sync '{}' | job_of); [ "$(CAPI wait "$J" | tr -d '\r')"
 CAPI get "jobs/$J" | grep -o 'requests [0-9.]*' | head -1 | sed 's/^/  | /'
 J=$(CAPI post bundles/seal '{}' | job_of); [ "$(CAPI wait "$J" | tr -d '\r')" = succeeded ] && ok "seal job $J succeeded" || fail "seal failed"
 J=$(CAPI post bundles/export '{"seq":1,"out":"usb/bundle-1"}' | job_of); [ "$(CAPI wait "$J" | tr -d '\r')" = succeeded ] && ok "export job $J succeeded" || fail "export failed"
-CAPI get audit | grep -q '"job.sync"' && ok "the jobs are in the audit log"
+S=$(CAPI post schedules '{"repos":["pypi"],"rule":{"kind":"daily","at":"03:00"},"seal":true}' | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+[ -n "$S" ] && ok "schedule $S: daily at 03:00 UTC, sync pypi then seal" || fail "the schedule was not saved"
+RUN=$(CAPI post "schedules/$S/run" '{}')
+for J in $(echo "$RUN" | sed -n 's/.*"jobs":\[\([0-9,]*\)\].*/\1/p' | tr ',' ' '); do
+  [ "$(CAPI wait "$J" | tr -d '\r')" = succeeded ] || { CAPI get "jobs/$J"; fail "scheduled job $J failed"; }
+done
+[ "$(echo "$RUN" | grep -o '"jobs":\[[0-9,]*\]' | tr -cd ',' | wc -c)" = 1 ] && ok "running it queued a sync and a seal, and both succeeded" || fail "the schedule ran: $RUN"
+CAPI get audit | grep -q '"job.sync"' && CAPI get audit | grep -q "schedule $S" && ok "the jobs and the schedule's own are in the audit log"
 
 step "5. carry the bundle across"
 docker cp -q mer-i-collector:/var/lib/mer/files/usb "$WORK/usb"
