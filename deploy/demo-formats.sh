@@ -335,6 +335,6 @@ docker rm -f mer-registry >/dev/null 2>&1 || true
 step "23. vault: state and integrity"
 $V mer status
 $V mer fsck --deep
-$V sh -c 'grep -c " 200 " /tmp/http.log' | sed 's/^/  requests answered with 200: /'
+$V sh -c 'grep -c " 200 " /tmp/http.log || true' | sed 's/^/  requests answered with 200: /'
 
 step "DONE: all checks passed"

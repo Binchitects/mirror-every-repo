@@ -1217,7 +1217,7 @@ fn main() -> Result<()> {
                 // blob downloads (the collector follows redirects only to
                 // allowed hosts).
                 let extra: &[&str] = match host.as_str() {
-                    "registry-1.docker.io" => &["auth.docker.io", "production.cloudflare.docker.com"],
+                    "registry-1.docker.io" => &["auth.docker.io", "production.cloudfront.docker.com", "production.cloudflare.docker.com"],
                     "quay.io" => &["cdn01.quay.io", "cdn02.quay.io", "cdn03.quay.io"],
                     "ghcr.io" => &["pkg-containers.githubusercontent.com"],
                     _ => &[],
