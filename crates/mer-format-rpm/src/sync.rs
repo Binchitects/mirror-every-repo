@@ -65,6 +65,16 @@ fn sha256_hex(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
 }
 
+/// Does `body` hash to `want` under `algo`? Fedora states SHA-512, most others SHA-256.
+fn matches(algo: &str, want: &str, body: &[u8]) -> Option<bool> {
+    let got = match algo {
+        "sha256" => sha256_hex(body),
+        "sha512" => hex::encode(sha2::Sha512::digest(body)),
+        _ => return None,
+    };
+    Some(got == want.to_ascii_lowercase())
+}
+
 /// A package location: relative, `/`-separated, no `.`/`..`, ends in `.rpm`.
 fn valid_href(h: &str) -> bool {
     h.ends_with(".rpm") && !h.starts_with("repodata/") && mer_core::validate_path(h).is_ok() && h.bytes().all(|b| b.is_ascii_graphic() && b != b'\\' && b != b'%' && b != b'?' && b != b'#')
@@ -106,8 +116,8 @@ fn metadata(client: &HttpClient, base: &str, d: &DataRef) -> Result<String, RpmE
         return Err(up(format!("repomd.xml names {:?}", d.href)));
     }
     let body = client.get(&url, &[])?.bytes(&url, MAX_METADATA)?;
-    if d.checksum.0 != "sha256" || sha256_hex(&body) != d.checksum.1.to_ascii_lowercase() {
-        return Err(up(format!("{url}: does not match its {} checksum in repomd.xml", d.checksum.0)));
+    if matches(&d.checksum.0, &d.checksum.1, &body) != Some(true) {
+        return Err(up(format!("{url}: does not match its {} checksum in repomd.xml (SHA-256 and SHA-512 are accepted)", d.checksum.0)));
     }
     let limit = d.open_size.unwrap_or(MAX_METADATA).min(MAX_METADATA);
     let mut out = Vec::new();
@@ -129,7 +139,7 @@ fn metadata(client: &HttpClient, base: &str, d: &DataRef) -> Result<String, RpmE
         return Err(up(format!("{url}: unpacks to more than its declared size")));
     }
     if let Some((algo, sum)) = &d.open_checksum {
-        if algo == "sha256" && sha256_hex(&out) != sum.to_ascii_lowercase() {
+        if matches(algo, sum, &out) == Some(false) {
             return Err(up(format!("{url}: unpacked content does not match its checksum")));
         }
     }

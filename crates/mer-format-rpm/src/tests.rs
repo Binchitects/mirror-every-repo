@@ -235,6 +235,50 @@ fn requirements_are_followed_across_repositories_through_names_files_and_rich_de
 }
 
 #[test]
+fn sha512_and_zstd_metadata_as_fedora_publishes_it_is_read() {
+    let r = rig();
+    r.up.repo("baseos", &[p("app", "1")]);
+    r.up.repo("appstream", &[]);
+    // Re-publish baseos primary as zstd, named and checked by SHA-512.
+    let mut routes = r.up.routes.lock().unwrap();
+    let md = String::from_utf8(routes["/baseos/repodata/repomd.xml"].clone()).unwrap();
+    let href = md.split("location href=\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&routes[&format!("/baseos/{href}")][..]), &mut xml).unwrap();
+    let zst = zstd_frame(xml.as_bytes());
+    let sum = hex::encode(<sha2::Sha512 as sha2::Digest>::digest(&zst));
+    let new_href = format!("repodata/{sum}-primary.xml.zst");
+    routes.insert(format!("/baseos/{new_href}"), zst.clone());
+    let open = hex::encode(<sha2::Sha512 as sha2::Digest>::digest(xml.as_bytes()));
+    let old_sum = md.split("<checksum type=\"sha256\">").nth(1).unwrap().split('<').next().unwrap().to_string();
+    let old_open = md.split("<open-checksum type=\"sha256\">").nth(1).unwrap().split('<').next().unwrap().to_string();
+    let md = md
+        .replacen(&format!("<checksum type=\"sha256\">{old_sum}"), &format!("<checksum type=\"sha512\">{sum}"), 1)
+        .replacen(&format!("<open-checksum type=\"sha256\">{old_open}"), &format!("<open-checksum type=\"sha512\">{open}"), 1)
+        .replacen(&href, &new_href, 1);
+    routes.insert("/baseos/repodata/repomd.xml".into(), md.into_bytes());
+    drop(routes);
+    r.sync().unwrap();
+    assert_eq!(r.rpms(), ["app-1-1.x86_64.rpm"]);
+}
+
+/// A zstd frame of raw (uncompressed) blocks, enough to exercise the decoder.
+fn zstd_frame(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x28, 0xb5, 0x2f, 0xfd];
+    // Frame header: single segment, 4-byte content size.
+    out.push(0b1010_0000);
+    out.extend((data.len() as u32).to_le_bytes());
+    let chunks: Vec<&[u8]> = data.chunks(100_000).collect();
+    for (i, c) in chunks.iter().enumerate() {
+        let last = (i == chunks.len() - 1) as u32;
+        let header = last | ((c.len() as u32) << 3);
+        out.extend(&header.to_le_bytes()[..3]);
+        out.extend(*c);
+    }
+    out
+}
+
+#[test]
 fn unsatisfiable_requirements_warn_and_unknown_packages_fail() {
     let mut r = rig();
     let mut app = p("app", "1");
