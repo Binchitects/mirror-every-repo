@@ -77,7 +77,7 @@ The installer verifies the download against its checksum, installs what it needs
 The container image is the other way to run it:
 
 ```bash
-docker pull ghcr.io/binchitects/mirror-every-repo:1.2.0
+docker pull ghcr.io/binchitects/mirror-every-repo:1.3.0
 ```
 
 To build from source, see [Development](#development).
