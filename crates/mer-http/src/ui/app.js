@@ -41,6 +41,12 @@ function when(ms) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// The same in UTC, where a schedule's rule is in UTC.
+function whenUtc(ms) {
+  if (!ms) return "never";
+  return `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
 // "3 days ago", for how old the content of a repository is.
 function ago(ms) {
   if (!ms) return "never";
@@ -871,13 +877,101 @@ async function runJob(path, body, what) {
   render();
 }
 
+const WEEKDAYS = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]];
+
+function ruleText(rule) {
+  if (!rule) return "unreadable rule";
+  if (rule.kind === "every") return `every ${count(rule.hours, "hour", "hours")}`;
+  const days = rule.days || [];
+  const which = days.length === 7 ? "daily" : days.join("+") === "mon+tue+wed+thu+fri" ? "weekdays" : days.map((d) => d[0].toUpperCase() + d.slice(1)).join(", ");
+  return `${which} at ${rule.at} UTC`;
+}
+
+async function scheduleDialog(current, repos, sources) {
+  const rule = (current && current.rule) || { kind: "daily", at: "02:00", days: WEEKDAYS.map(([d]) => d) };
+  const kind = h("select", {}, h("option", { value: "daily" }, "At a time of day"), h("option", { value: "every" }, "Every few hours"));
+  kind.value = rule.kind;
+  const at = h("input", { type: "time", value: rule.at || "02:00", required: true });
+  const hours = h("input", { type: "number", min: "1", max: "168", step: "1", value: String(rule.hours || 6) });
+  const dayBoxes = WEEKDAYS.map(([d, label]) => {
+    const box = h("input", { type: "checkbox", value: d, checked: (rule.days || WEEKDAYS.map(([x]) => x)).includes(d) });
+    return h("label", { class: "inline" }, box, ` ${label}`);
+  });
+  const hhmm = (d, utc) => [utc ? d.getUTCHours() : d.getHours(), utc ? d.getUTCMinutes() : d.getMinutes()].map((x) => String(x).padStart(2, "0")).join(":");
+  const now = new Date();
+  const dailyPart = h("div", {}, h("label", { class: "f" }, "Time (UTC)", at,
+    h("small", { class: "muted" }, `It is ${hhmm(now, true)} UTC now (${hhmm(now, false)} on this computer).`)), h("div", { class: "f" }, "Days", h("div", { class: "days" }, dayBoxes)));
+  const everyPart = h("label", { class: "f" }, "Hours between runs", hours);
+  const sync = () => { dailyPart.hidden = kind.value !== "daily"; everyPart.hidden = kind.value !== "every"; };
+  kind.onchange = sync;
+  sync();
+  const chosen = new Set((current && current.repos) || []);
+  const all = h("input", { type: "checkbox", checked: chosen.size === 0 });
+  const repoBoxes = repos.map((r, i) => {
+    const box = h("input", { type: "checkbox", value: r.name, checked: chosen.has(r.name) });
+    return h("label", { class: "inline" }, box, ` ${r.name}`, !sources[i].spec && h("span", { class: "muted" }, " (no source)"));
+  });
+  const repoList = h("div", { class: "days" }, repoBoxes);
+  const syncAll = () => { repoList.hidden = all.checked; };
+  all.onchange = syncAll;
+  syncAll();
+  const seal = h("input", { type: "checkbox", checked: current ? current.seal : true });
+  const enabled = h("input", { type: "checkbox", checked: current ? current.enabled : true });
+  const body = [h("div", { class: "form" },
+    h("label", { class: "f" }, "When", kind), dailyPart, everyPart,
+    h("div", { class: "f" }, "Repositories", h("label", { class: "inline" }, all, " Every repository with a source"), repoList),
+    h("label", { class: "inline" }, seal, " Then seal a bundle of what changed"),
+    h("label", { class: "inline" }, enabled, " On"),
+    h("small", { class: "muted" }, "Each run queues a sync job per repository, after any jobs already waiting, then the seal. A repository whose sync is still waiting or running is skipped. Writing the bundle to disk stays a step you take."))];
+  if (!(await confirmDialog(current ? `Schedule #${current.id}` : "New schedule", body, "Save", false))) return;
+  const payload = {
+    rule: kind.value === "every" ? { kind: "every", hours: Number(hours.value) } : { kind: "daily", at: at.value, days: dayBoxes.map((l) => l.firstChild).filter((b) => b.checked).map((b) => b.value) },
+    repos: all.checked ? [] : repoBoxes.map((l) => l.firstChild).filter((b) => b.checked).map((b) => b.value),
+    seal: seal.checked, enabled: enabled.checked,
+  };
+  try {
+    await api(current ? `schedules/${current.id}` : "schedules", payload);
+    flash("good", current ? `Schedule #${current.id} saved.` : "Schedule created.");
+  } catch (err) { flash("bad", err.message); }
+  render();
+}
+
+function schedulesCard(schedules, repos, sources, info) {
+  const act = async (path, done) => {
+    try {
+      const r = await api(path, {});
+      flash(r.note ? "bad" : "good", r.note ? `${done} ${r.note}.` : done);
+    } catch (err) { flash("bad", err.message); }
+    render();
+  };
+  const rows = schedules.map((s) => h("tr", {},
+    td(ruleText(s.rule)),
+    td(s.repos.length ? s.repos.join(", ") : h("span", { class: "muted" }, "every repository with a source")),
+    td(s.seal ? (info.seal ? "seal" : h("span", { class: "muted" }, "seal (no bundle key)")) : ""),
+    td(s.enabled ? whenUtc(s.next_at) : badge("off"), "nowrap"),
+    td(s.last_at ? h("div", {}, whenUtc(s.last_at), " ",
+      s.last_jobs.map((j) => h("a", { href: "#", onclick: (e) => { e.preventDefault(); jobDialog(j); } }, `#${j} `)),
+      s.last_note && h("div", { class: "muted small" }, s.last_note)) : h("span", { class: "muted" }, "never"), "nowrap"),
+    td(h("div", { class: "actions" }, can("operator") && [
+      h("button", { class: "btn", onclick: () => scheduleDialog(s, repos, sources) }, "Edit"),
+      h("button", { class: "btn", onclick: () => act(`schedules/${s.id}/run`, `Schedule #${s.id} queued its jobs.`) }, "Run now"),
+      h("button", { class: "btn danger", onclick: async () => {
+        if (!(await confirmDialog(`Delete schedule #${s.id}`, [h("p", {}, `${ruleText(s.rule)} stops. Jobs it already queued still run.`)], "Delete", true))) return;
+        act(`schedules/${s.id}/delete`, `Schedule #${s.id} deleted.`);
+      } }, "Delete")]))));
+  return h("div", { class: "card" },
+    h("div", { class: "head" }, h("h3", {}, "Schedules"), h("span", { class: "spacer" }),
+      can("operator") && h("button", { class: "btn", onclick: () => scheduleDialog(null, repos, sources) }, "New schedule")),
+    table(["When", "Repositories", "Then", "Next run", "Last run", ""], rows, "No schedules. Syncs run when someone starts them."));
+}
+
 async function jobsView() {
   const info = await jobsInfo();
   if (!info.enabled) {
     return h("div", {}, h("h2", {}, "Jobs"), h("div", { class: "card empty" },
       "This server does not run jobs. On a collector, start it with: mer serve --jobs --admin-listen 127.0.0.1:8081 --files <dir> --bundle-key <key>"));
   }
-  const [o, jobs] = await Promise.all([api("overview"), api("jobs")]);
+  const [o, jobs, schedules] = await Promise.all([api("overview"), api("jobs"), api("schedules")]);
   const sources = await Promise.all(o.repos.map((r) => api(`repos/${encodeURIComponent(r.name)}/source`).catch(() => ({ spec: null }))));
   const repoRows = o.repos.map((r, i) => h("tr", {},
     td(r.name), td(badge(r.format)), td(sourceSummary(sources[i].spec)),
@@ -912,6 +1006,7 @@ async function jobsView() {
       h("div", { class: "head" }, h("h3", {}, "Repositories and their sources"), h("span", { class: "spacer" }),
         can("admin") && h("button", { class: "btn", onclick: () => newRepoDialog(info) }, "New repository")),
       table(["Repository", "Format", "Source", ""], repoRows, "No repositories yet.")),
+    schedulesCard(schedules, o.repos, sources, info),
     bundleCard,
     h("div", { class: "card" }, h("h3", {}, "Recent jobs"),
       table(["Job", "Kind", "Target", "State", "By", "Started", { label: "Took", num: true }], jobRows, "No jobs yet.")));

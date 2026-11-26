@@ -392,8 +392,8 @@ EOF
 Next steps
   1. On the vault:  sudo mer key trust $DATA/trust.txt $PUB
      (or install the vault with: --trust $PUB)
-  2. In the panel's Jobs tab: create repositories, set their sources, sync, seal, export.
-     Or on the command line: say what to mirror in $CONF/sync.sh and run it
+  2. In the panel's Jobs tab: create repositories, set their sources, sync, seal, export,
+     and add a schedule to sync and seal on its own. Or on the command line: say what to mirror in $CONF/sync.sh and run it
      (sudo sh $CONF/sync.sh); it also runs daily (systemctl list-timers mer-sync.timer).
   3. Exports land in $DATA/files; copy them to a disk to carry across:
        sudo mer export media --seq <n> --out $DATA/files/bundle-<n>

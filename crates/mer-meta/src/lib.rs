@@ -18,8 +18,8 @@ use rusqlite::{Connection, TransactionBehavior};
 use std::path::Path;
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: i64 = 4;
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("schema.sql")), (2, include_str!("migration_2.sql")), (3, include_str!("migration_3.sql")), (4, include_str!("migration_4.sql"))];
+const SCHEMA_VERSION: i64 = 5;
+const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("schema.sql")), (2, include_str!("migration_2.sql")), (3, include_str!("migration_3.sql")), (4, include_str!("migration_4.sql")), (5, include_str!("migration_5.sql"))];
 
 #[derive(Debug, thiserror::Error)]
 pub enum MetaError {

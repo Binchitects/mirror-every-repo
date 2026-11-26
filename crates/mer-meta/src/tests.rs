@@ -384,7 +384,7 @@ fn a_version_2_database_with_data_is_upgraded_to_sources_jobs_and_history() {
     }
     let m = Meta::open(&path).unwrap();
     let version: i64 = m.read(|t| Ok(t.c.query_row("PRAGMA user_version", [], |r| r.get(0))?)).unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     assert_eq!(m.read(|t| t.repo_get("pypi")).unwrap().unwrap().stale_after_days, None, "no age limit by default");
     let repo = m.read(|t| t.repo_get("pypi")).unwrap().expect("repo survives");
     assert!(m.read(|t| t.user_get("admin")).unwrap().is_some(), "user survives");
@@ -408,4 +408,32 @@ fn a_version_2_database_with_data_is_upgraded_to_sources_jobs_and_history() {
     assert_eq!(list.iter().map(|j| (j.id, j.state.as_str())).collect::<Vec<_>>(), [(b, "cancelled"), (a, "interrupted")]);
     assert!(list.iter().all(|j| j.log.is_empty()), "lists leave the logs out");
     assert_eq!(clip_log("é"), "é");
+}
+
+#[test]
+fn schedules_come_due_and_remember_their_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = Meta::open(dir.path().join("meta.db")).unwrap();
+    let spec = ScheduleSpec { repos: r#"["pypi"]"#, rule: r#"{"kind":"every","hours":6}"#, seal: true, enabled: true, next_at: Some(100) };
+    let a = m.write(|t| t.schedule_create(&spec, 1, "olga")).unwrap();
+    let b = m.write(|t| t.schedule_create(&ScheduleSpec { enabled: false, next_at: None, ..spec.clone() }, 1, "olga")).unwrap();
+    assert!(m.read(|t| t.schedules_due(99)).unwrap().is_empty());
+    assert_eq!(m.read(|t| t.schedules_due(100)).unwrap().iter().map(|s| s.id).collect::<Vec<_>>(), [a], "disabled ones never come due");
+
+    m.write(|t| t.schedule_ran(a, 100, Some(500), "[7,8]", "")).unwrap();
+    m.write(|t| t.schedule_ran(a, 150, None, "[9]", "npm has no source")).unwrap();
+    let s = m.read(|t| t.schedule_get(a)).unwrap().unwrap();
+    assert_eq!((s.last_at, s.next_at, s.last_jobs.as_str(), s.last_note.as_str(), s.seal), (Some(150), Some(500), "[9]", "npm has no source", true), "a run by hand keeps the next time");
+
+    assert!(m.write(|t| t.schedule_update(b, &ScheduleSpec { enabled: true, next_at: Some(42), ..spec.clone() }, 2, "admin")).unwrap());
+    assert_eq!(m.read(|t| t.schedule_get(b)).unwrap().unwrap().updated_by, "admin");
+    assert!(m.write(|t| t.schedule_delete(b)).unwrap());
+    assert!(!m.write(|t| t.schedule_update(b, &spec, 3, "admin")).unwrap());
+    assert_eq!(m.read(|t| t.schedule_list()).unwrap().len(), 1);
+
+    assert!(!m.read(|t| t.job_active("sync", "pypi")).unwrap());
+    let j = m.write(|t| t.job_create("sync", "pypi", "[]", "schedule 1", 5)).unwrap();
+    assert!(m.read(|t| t.job_active("sync", "pypi")).unwrap());
+    m.write(|t| t.job_finish(j, "succeeded", Some(0), "", 6)).unwrap();
+    assert!(!m.read(|t| t.job_active("sync", "pypi")).unwrap());
 }

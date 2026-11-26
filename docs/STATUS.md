@@ -48,7 +48,7 @@ Version and range logic is checked against the reference implementations: apt ve
 - Transfers: imported bundles and how far each repository has been applied.
 - Wishlist with what to add on the collector for each item, as text to download; dismiss and clear. Traffic (charts, per repository, per file, per client), Audit log with its integrity check.
 - Access: users and roles, client tokens, own password.
-- Jobs (with `mer serve --jobs`): repositories and their sources, sync, seal, export to disk, import from disk, with live job logs and cancel. Jobs run `mer` itself, one at a time; files are confined to the `--files` directory; editing sources is for admins, running jobs for operators, and both are audited.
+- Jobs (with `mer serve --jobs`): repositories and their sources, sync, seal, export to disk, import from disk, with live job logs and cancel; schedules that sync and seal at set times. Jobs run `mer` itself, one at a time; files are confined to the `--files` directory; editing sources is for admins, running jobs for operators, and both are audited.
 
 Create the first administrator on the server with `mer user add admin --role admin`. Use `--tls-cert` and `--tls-key` for HTTPS, and `--admin-listen` to keep the panel on a different address from package clients.
 
@@ -106,7 +106,7 @@ Upstream signatures are checked for apt and, when a key is given, for RPM reposi
 - Bundle trust is a static file of public keys with a threshold. No root keys, no rotation chain, no epochs beyond a fixed epoch 1.
 - Bundle payload is not compressed and not encrypted.
 - A repo's changes always travel as chained steps. There is no "full state" bundle, so a vault that is further behind than the step window needs the missing bundles re-exported.
-- Jobs run one at a time per server, and there is no schedule in the panel (the installer's daily timer runs `/etc/mer/sync.sh`). Diode export and import are command-line only.
+- Jobs run one at a time per server. Schedules are daily at a UTC time on chosen days, or every N hours; there are no cron expressions or time zones, and a scheduled run does not write bundles to disk. Diode export and import are command-line only.
 - Diode: no heartbeats and no signed staleness detection; no spill-to-disk for partly received segments; plain socket calls with the default receive buffer (the demos show a quarter or more of packets dropped on a burst, which error correction and the second pass absorb).
 - Media: no parity volumes.
 

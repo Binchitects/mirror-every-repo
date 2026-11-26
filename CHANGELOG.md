@@ -12,9 +12,11 @@ All notable changes to this project are recorded here. Versions follow [Semantic
 - **Review by package**: the review of a snapshot lists packages added, updated and removed before the files.
 - **Wishlist actions**: each item says what to add on the collector, in the words of the Jobs tab's source form and the sync command (`--requirement=django`, `--crate=rand`, `--artifact=g:a:v`, ...). The list downloads as text; operators can dismiss items or clear it.
 
+- **Schedules** in the Jobs tab: sync chosen repositories (or every one with a source) daily at a UTC time on chosen days, or every few hours, then seal a bundle of what changed. Runs that came due while the server was down happen once when it is back; a sync still waiting is not queued twice; "Run now" runs a schedule straight away. Scheduled jobs are audited as `schedule <n>`.
+
 ### Upgrading
 
-The database schema moves to version 4 on first start.
+The database schema moves to version 5 on first start.
 
 ## [1.2.0] - 2026-11-26
 

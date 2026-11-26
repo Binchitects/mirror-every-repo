@@ -13,6 +13,7 @@ mod catalog;
 mod formats;
 pub mod jobs;
 mod packages;
+pub mod schedule;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -103,6 +104,8 @@ impl App {
         let runner = Arc::new(jobs::Jobs::new(cfg));
         let app = Self::build(st.clone(), Some(runner.clone()));
         std::thread::spawn(move || runner.run(st));
+        let clock = app.clone();
+        std::thread::spawn(move || schedule::run_forever(clock));
         app
     }
 

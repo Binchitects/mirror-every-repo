@@ -859,3 +859,63 @@ fn every_format_turns_a_real_miss_into_what_to_add() {
         assert!(hints.contains(&(repo.to_string(), want.to_string())), "{format} {url}: no wish with {want} in {hints:?}");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn schedules_queue_syncs_then_a_seal_and_keep_to_their_rule() {
+    let (r, _files) = jobs_rig();
+    let (admin, olga, vic) = (Client::login(&r, "admin"), Client::login(&r, "olga"), Client::login(&r, "vic"));
+    admin.post("/api/repos", json!({ "name": "rust", "format": "cargo" }));
+    admin.post("/api/repos", json!({ "name": "nosrc", "format": "pypi" }));
+    assert_eq!(admin.post("/api/repos/rust/source", json!({ "spec": { "crate": ["serde"] } })).status, 200);
+
+    let daily = json!({ "repos": ["rust", "nosrc"], "rule": { "kind": "daily", "at": "02:30", "days": ["mon", "thu"] }, "seal": true });
+    assert_eq!(vic.post("/api/schedules", daily.clone()).status, 403);
+    for bad in [json!({ "rule": { "kind": "daily", "at": "25:00" } }), json!({ "repos": ["nope"], "rule": { "kind": "every", "hours": 6 } }), json!({ "rule": { "kind": "cron" } })] {
+        assert_eq!(olga.post("/api/schedules", bad.clone()).status, 400, "{bad}");
+    }
+    let made = olga.post("/api/schedules", daily);
+    assert_eq!(made.status, 200, "{}", made.text);
+    let id = made.json["id"].as_i64().unwrap();
+    let next = made.json["next_at"].as_i64().unwrap();
+    assert!(next > mer_storage::now_ms());
+    assert_eq!(made.json["rule"], json!({ "kind": "daily", "at": "02:30", "days": ["mon", "thu"] }));
+
+    // Not yet due: nothing happens. Once due: a sync for each repo with a source, then the seal.
+    crate::schedule::tick(&r.app, next - 1);
+    assert_eq!(vic.get("/api/jobs").json.as_array().unwrap().len(), 0);
+    crate::schedule::tick(&r.app, next);
+    let s = &vic.get("/api/schedules").json[0];
+    let jobs: Vec<u64> = s["last_jobs"].as_array().unwrap().iter().map(|j| j.as_u64().unwrap()).collect();
+    assert_eq!(jobs.len(), 2, "{s}");
+    assert!(s["last_note"].as_str().unwrap().contains("nosrc has no source"), "{s}");
+    assert!(s["next_at"].as_i64().unwrap() > next, "the next time moves on");
+    let (sync, seal) = (wait_job(&vic, jobs[0]), wait_job(&vic, jobs[1]));
+    assert_eq!((sync.json["kind"].as_str(), sync.json["state"].as_str(), sync.json["actor"].as_str()), (Some("sync"), Some("succeeded"), Some(&*format!("schedule {id}"))));
+    assert!(sync.json["log"].as_str().unwrap().contains("cargo sync rust --crate=serde"));
+    assert_eq!(seal.json["kind"], "seal");
+    assert!(seal.json["log"].as_str().unwrap().contains("export seal --key=/keys/bundle.key"));
+    crate::schedule::tick(&r.app, next + 1);
+    assert_eq!(vic.get("/api/jobs").json.as_array().unwrap().len(), 2, "one run per due time");
+
+    // A sync still waiting is not queued twice.
+    admin.post("/api/repos/rust/source", json!({ "spec": { "crate": ["slow"] } }));
+    let first = olga.post(&format!("/api/schedules/{id}/run"), json!({}));
+    assert_eq!(first.json["jobs"].as_array().unwrap().len(), 2, "{}", first.text);
+    let again = olga.post(&format!("/api/schedules/{id}/run"), json!({}));
+    assert!(again.json["note"].as_str().unwrap().contains("rust is already queued or syncing"), "{}", again.text);
+    for j in first.json["jobs"].as_array().unwrap().iter().chain(again.json["jobs"].as_array().unwrap()) {
+        olga.post(&format!("/api/jobs/{j}/cancel"), json!({}));
+    }
+
+    // Off: never due. Then gone.
+    let off = olga.post(&format!("/api/schedules/{id}"), json!({ "rule": { "kind": "every", "hours": 6 }, "enabled": false }));
+    assert_eq!((off.json["enabled"].as_bool(), off.json["next_at"].clone(), off.json["repos"].clone()), (Some(false), Value::Null, json!([])), "{}", off.text);
+    assert_eq!(olga.post("/api/schedules/999", json!({ "rule": { "kind": "every", "hours": 6 } })).status, 404);
+    assert_eq!(olga.post(&format!("/api/schedules/{id}/delete"), json!({})).status, 200);
+    assert_eq!(vic.get("/api/schedules").json, json!([]));
+    let audit = admin.get("/api/audit?limit=200").text;
+    for action in ["schedule.set", "schedule.run", "schedule.delete"] {
+        assert!(audit.contains(action), "{action} is not in the audit log");
+    }
+}

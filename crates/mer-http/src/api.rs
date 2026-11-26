@@ -214,6 +214,10 @@ fn get(app: &App, me: &Identity, segments: &[&str], query: &str) -> ApiResult {
     let st = &app.st;
     match segments {
         ["me"] => Ok(me_json(me)),
+        ["schedules"] => {
+            let rows = st.meta().read(|t| t.schedule_list())?;
+            Ok(json!(rows.iter().map(schedule_json).collect::<Vec<_>>()))
+        }
         ["jobs", "forms"] => Ok(json!({
             "enabled": app.jobs.is_some(),
             "files": app.jobs.as_ref().is_some_and(|j| j.cfg.files.is_some()),
@@ -572,15 +576,44 @@ fn job_json(j: &mer_meta::JobRow) -> Value {
 /// Queue a job; audited with who asked for it.
 fn enqueue(app: &App, actor: &str, kind: &str, target: &str, args: Vec<String>) -> ApiResult {
     let runner = app.jobs.as_ref().ok_or_else(no_jobs)?;
-    let args_json = serde_json::to_string(&args).expect("JSON");
-    let now = mer_storage::now_ms();
-    let id = app.st.meta().write(|t| {
-        let id = t.job_create(kind, target, &args_json, actor, now)?;
-        t.audit(now, actor, &format!("job.{kind}"), &format!("job {id}: {target}"))?;
-        Ok(id)
-    })?;
+    let id = crate::schedule::submit(app, actor, kind, target, &args, false).map_err(|e| ApiError(500, e))?.expect("always queued");
     runner.notify();
     Ok(json!({ "job": id }))
+}
+
+fn schedule_json(s: &mer_meta::ScheduleRow) -> Value {
+    json!({
+        "id": s.id,
+        "repos": serde_json::from_str::<Value>(&s.repos).unwrap_or(json!([])),
+        "rule": serde_json::from_str::<Value>(&s.rule).unwrap_or(Value::Null),
+        "seal": s.seal, "enabled": s.enabled, "next_at": s.next_at, "last_at": s.last_at,
+        "last_jobs": serde_json::from_str::<Value>(&s.last_jobs).unwrap_or(json!([])),
+        "last_note": s.last_note, "updated_at": s.updated_at, "updated_by": s.updated_by,
+    })
+}
+
+/// Create (`id` None) or change a schedule from the panel's form.
+fn schedule_save(app: &App, actor: &str, id: Option<i64>, b: &Value) -> ApiResult {
+    app.jobs.as_ref().ok_or_else(no_jobs)?;
+    let (repos, rule) = crate::schedule::validate(app, b).map_err(bad)?;
+    let rule_text = rule.to_json().to_string();
+    let seal = b.get("seal").and_then(Value::as_bool).unwrap_or(false);
+    let enabled = b.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let now = mer_storage::now_ms();
+    let spec = crate::schedule::spec(&repos, &rule_text, seal, enabled, now, rule);
+    let what = format!("{rule_text} repos {repos}{}{}", if seal { " then seal" } else { "" }, if enabled { "" } else { " (off)" });
+    let id = app.st.meta().write(|t| {
+        let id = match id {
+            None => t.schedule_create(&spec, now, actor)?,
+            Some(id) if t.schedule_update(id, &spec, now, actor)? => id,
+            Some(_) => return Ok(None),
+        };
+        t.audit(now, actor, "schedule.set", &format!("schedule {id}: {what}"))?;
+        Ok(Some(id))
+    })?;
+    let id = id.ok_or_else(|| ApiError(404, "no such schedule".into()))?;
+    let row = app.st.meta().read(|t| t.schedule_get(id))?.expect("just written");
+    Ok(schedule_json(&row))
 }
 
 fn no_jobs() -> ApiError {
@@ -660,6 +693,43 @@ fn post(app: &App, me: &Identity, segments: &[&str], b: &Value) -> ApiResult {
                 args.push("--auto-publish".into());
             }
             enqueue(app, actor, "import", &dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), args)
+        }
+        ["schedules"] => {
+            require(me.role, Role::Operator)?;
+            schedule_save(app, actor, None, b)
+        }
+        ["schedules", id] => {
+            require(me.role, Role::Operator)?;
+            schedule_save(app, actor, Some(id.parse().map_err(|_| bad("schedule number"))?), b)
+        }
+        ["schedules", id, "delete"] => {
+            require(me.role, Role::Operator)?;
+            let id: i64 = id.parse().map_err(|_| bad("schedule number"))?;
+            let now = mer_storage::now_ms();
+            let gone = st.meta().write(|t| {
+                let gone = t.schedule_delete(id)?;
+                if gone {
+                    t.audit(now, actor, "schedule.delete", &format!("schedule {id}"))?;
+                }
+                Ok(gone)
+            })?;
+            if !gone {
+                return Err(ApiError(404, "no such schedule".into()));
+            }
+            Ok(json!({}))
+        }
+        ["schedules", id, "run"] => {
+            // Now, by hand: the schedule keeps its next time.
+            require(me.role, Role::Operator)?;
+            app.jobs.as_ref().ok_or_else(no_jobs)?;
+            let id: i64 = id.parse().map_err(|_| bad("schedule number"))?;
+            let s = st.meta().read(|t| t.schedule_get(id))?.ok_or_else(|| ApiError(404, "no such schedule".into()))?;
+            let repos: Vec<String> = serde_json::from_str(&s.repos).unwrap_or_default();
+            let now = mer_storage::now_ms();
+            st.meta().write(|t| t.audit(now, actor, "schedule.run", &format!("schedule {id}")))?;
+            let (jobs, note) = crate::schedule::run(app, id, &repos, s.seal).map_err(bad)?;
+            st.meta().write(|t| t.schedule_ran(id, now, None, &serde_json::to_string(&jobs).expect("JSON"), &note))?;
+            Ok(json!({ "jobs": jobs, "note": note }))
         }
         ["jobs", id, "cancel"] => {
             require(me.role, Role::Operator)?;

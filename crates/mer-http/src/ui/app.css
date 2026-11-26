@@ -135,3 +135,9 @@ textarea { width: 100%; box-sizing: border-box; font: inherit; }
 a.btn { text-decoration: none; display: inline-block; }
 details.files { margin-top: 12px; }
 details.files summary { cursor: pointer; color: var(--muted); margin-bottom: 6px; }
+label.inline { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; }
+.days { display: flex; flex-wrap: wrap; gap: 4px 0; margin-top: 4px; }
+.small { font-size: 12px; }
+[hidden] { display: none !important; }
+.form > label.inline, .f > label.inline { display: flex; margin: 2px 0; }
+div.f { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
